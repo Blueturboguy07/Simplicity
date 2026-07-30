@@ -30,26 +30,73 @@ type Config = {
   binary: string;
 };
 
+const isWin = process.platform === 'win32';
+const home = process.env.HOME ?? process.env.USERPROFILE ?? '';
+
+/* On Windows the CLI presents as claude.exe (native installer, under
+   %USERPROFILE%\.local\bin) or claude.cmd (npm shim, under %APPDATA%\npm).
+   npm also drops an extensionless POSIX `claude` script next to the .cmd;
+   Windows can't execute it, so it is deliberately never probed there. */
+const BINARY_NAMES = isWin ? ['claude.exe', 'claude.cmd'] : ['claude'];
+
 /* A packaged .app launched from Finder inherits a minimal PATH, so `which`
    alone misses a CLI installed under the user's home. */
-const CANDIDATES = [
-  `${process.env.HOME}/.local/bin/claude`,
-  '/usr/local/bin/claude',
-  '/opt/homebrew/bin/claude',
-  `${process.env.HOME}/.claude/local/claude`,
-];
+const CANDIDATES = isWin
+  ? [
+      path.join(home, '.local', 'bin', 'claude.exe'),
+      path.join(process.env.APPDATA ?? '', 'npm', 'claude.cmd'),
+    ]
+  : [
+      `${home}/.local/bin/claude`,
+      '/usr/local/bin/claude',
+      '/opt/homebrew/bin/claude',
+      `${home}/.claude/local/claude`,
+    ];
 
 export const findClaudeBinary = (): string | null => {
   for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
     if (!dir) continue;
-    const p = path.join(dir, 'claude');
-    try {
-      if (fs.existsSync(p)) return p;
-    } catch {
-      /* unreadable PATH entry — keep looking */
+    for (const name of BINARY_NAMES) {
+      const p = path.join(dir, name);
+      try {
+        if (fs.existsSync(p)) return p;
+      } catch {
+        /* unreadable PATH entry — keep looking */
+      }
     }
   }
   return CANDIDATES.find((c) => fs.existsSync(c)) ?? null;
+};
+
+/* A .cmd shim can't be spawned without shell:true (Node's CVE-2024-27980
+   hardening throws EINVAL — synchronously, so it would reject these promises
+   rather than surface as a proc 'error'), and shell-quoting arbitrary prompt
+   text is an injection hazard. The npm shim only wraps the package's real
+   entry point, so resolve that and spawn it directly — no shell anywhere.
+   Current @anthropic-ai/claude-code ships a native bin/claude.exe on Windows
+   ("bin": {"claude": "bin/claude.exe"}); older releases exposed cli.js. */
+const spawnSpec = (binary: string): { command: string; prefix: string[] } => {
+  if (isWin && binary.toLowerCase().endsWith('.cmd')) {
+    const pkg = path.join(
+      path.dirname(binary),
+      'node_modules',
+      '@anthropic-ai',
+      'claude-code',
+    );
+    const exe = path.join(pkg, 'bin', 'claude.exe');
+    if (fs.existsSync(exe)) return { command: exe, prefix: [] };
+    const cliJs = path.join(pkg, 'cli.js');
+    if (fs.existsSync(cliJs)) return { command: 'node', prefix: [cliJs] };
+  }
+  return { command: binary, prefix: [] };
+};
+
+const spawnClaude = (binary: string, args: string[]) => {
+  const { command, prefix } = spawnSpec(binary);
+  return spawn(command, [...prefix, ...args], {
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 };
 
 /* Used whenever the caller supplies no system prompt of its own. It only has
@@ -83,21 +130,17 @@ export const verifyClaudeCode = (
   binary: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> =>
   new Promise((resolve) => {
-    const proc = spawn(
-      binary,
-      [
-        '-p',
-        'Reply with: ok',
-        '--output-format',
-        'json',
-        '--allowed-tools',
-        'None__SimplicityTextOnly',
-        '--strict-mcp-config',
-        '--disable-slash-commands',
-        '--no-session-persistence',
-      ],
-      { env: process.env, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
+    const proc = spawnClaude(binary, [
+      '-p',
+      'Reply with: ok',
+      '--output-format',
+      'json',
+      '--allowed-tools',
+      'None__SimplicityTextOnly',
+      '--strict-mcp-config',
+      '--disable-slash-commands',
+      '--no-session-persistence',
+    ]);
 
     let out = '';
     let err = '';
@@ -203,10 +246,7 @@ class ClaudeCodeLLM extends BaseLLM<Config> {
     onLine: (line: string) => void,
   ): Promise<{ code: number; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const proc = spawn(this.config.binary, args, {
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+      const proc = spawnClaude(this.config.binary, args);
 
       let buf = '';
       let stderr = '';
