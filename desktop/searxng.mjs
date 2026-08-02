@@ -24,13 +24,20 @@ const HOST = '127.0.0.1';
 
 /* python-build-standalone publishes relocatable CPython builds for exactly the
    four targets we ship to. A venv bakes in absolute paths to its base
-   interpreter, so a venv can't be moved into a .app — these can. */
-const PY_SERIES = '3.12';
-const PBS_LATEST =
-  'https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest';
+   interpreter, so a venv can't be moved into a .app — these can.
 
-const SEARXNG_TARBALL =
-  'https://codeload.github.com/searxng/searxng/tar.gz/refs/heads/master';
+   Both sources are PINNED, not "latest". Provisioning happens on the user's
+   machine at first launch, so an unpinned source means upstream can break
+   every new install without us shipping anything — and the patches in
+   patchSearxng() are verified against exactly this SearXNG commit. Bump the
+   pins deliberately, re-checking those patches still apply. */
+const PY_SERIES = '3.12';
+const PBS_RELEASE =
+  'https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/20260728';
+
+/* searxng/searxng master @ 2026-08-01 — the project publishes no tags. */
+const SEARXNG_COMMIT = '8892414dc38dd57728b7f62f33152ea80e3b305f';
+const SEARXNG_TARBALL = `https://codeload.github.com/searxng/searxng/tar.gz/${SEARXNG_COMMIT}`;
 
 let proc = null; // the Flask process we spawned, if any
 let runningURL = null;
@@ -115,7 +122,7 @@ function pbsTriple() {
 }
 
 async function resolvePythonURL() {
-  const res = await fetch(PBS_LATEST, {
+  const res = await fetch(PBS_RELEASE, {
     headers: { 'user-agent': 'Simplicity-Desktop' },
   });
   if (!res.ok) throw new Error(`Couldn't reach python-build-standalone (${res.status})`);

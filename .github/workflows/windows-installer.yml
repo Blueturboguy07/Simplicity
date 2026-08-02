@@ -1,0 +1,70 @@
+# Builds the Windows NSIS installer ON WINDOWS.
+#
+# The v0.1.0 exe was cross-built from macOS, which broke it twice over:
+#   • electron-builder without wine extracts the uninstaller with a pure-JS
+#     reader that produces corrupt uninstallers ("no uninstall module found"
+#     reports; electron-userland/electron-builder#4875).
+#   • yarn install on macOS resolves platform-specific optional deps for
+#     darwin only, so the traced standalone server shipped without the win32
+#     builds of @napi-rs/canvas (pdf-parse → /api/chat) and sharp.
+# Building on a Windows runner fixes both, and the smoke-test below exercises
+# the installed uninstaller — the exact thing that shipped broken.
+#
+# The exe is uploaded as a workflow artifact; the release is assembled locally
+# so the mac DMG and Windows exe land in one publish with no broken-link gap.
+name: windows-installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: yarn dist:win
+
+      - name: Smoke-test install + uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $PWD 'release\Simplicity-Setup-Windows.exe'
+          if (!(Test-Path $setup)) { throw "installer was not produced" }
+
+          Start-Process -FilePath $setup -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity'
+          if (!(Test-Path (Join-Path $dir 'Simplicity.exe'))) { throw "Simplicity.exe missing after install" }
+          $resources = Join-Path $dir 'resources\.next\standalone'
+          if (!(Test-Path (Join-Path $resources 'server.js'))) { throw "standalone server missing after install" }
+          $canvasWin = Get-ChildItem -Recurse -Filter '*.node' (Join-Path $resources 'node_modules') |
+            Where-Object { $_.Name -match 'win32' -or $_.FullName -match 'win32' }
+          if (-not $canvasWin) { throw "no win32 native modules in the bundle - cross-build regression" }
+
+          $un = Join-Path $dir 'Uninstall Simplicity.exe'
+          if (!(Test-Path $un)) { throw "uninstaller missing after install" }
+          Start-Process -FilePath $un -ArgumentList '/S' -Wait
+
+          # A /S uninstall hands off to a temp copy and returns early - poll.
+          $gone = $false
+          foreach ($i in 1..12) {
+            Start-Sleep -Seconds 5
+            if (!(Test-Path (Join-Path $dir 'Simplicity.exe'))) { $gone = $true; break }
+          }
+          if (-not $gone) { throw "uninstaller ran but Simplicity.exe is still present" }
+          Write-Host "install + uninstall both clean"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Simplicity-Setup-Windows
+          path: release/Simplicity-Setup-Windows.exe
+          if-no-files-found: error

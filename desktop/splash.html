@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Simplicity</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #0a0a0a;
+    color: #e8e8e6;
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+  .wrap { text-align: center; max-width: 420px; padding: 0 24px; }
+  .name { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; }
+  .spinner {
+    margin: 28px auto 20px;
+    width: 22px; height: 22px;
+    border: 2px solid rgba(232,232,230,0.15);
+    border-top-color: rgba(232,232,230,0.75);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #status { font-size: 13px; color: rgba(232,232,230,0.55); min-height: 18px; }
+  #hint { font-size: 12px; color: rgba(232,232,230,0.35); margin-top: 10px; }
+  .error #status { color: #f0a0a0; }
+  .error .spinner { display: none; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="name">Simplicity</div>
+    <div class="spinner"></div>
+    <div id="status">Starting…</div>
+    <div id="hint"></div>
+  </div>
+  <script>
+    /* The shell drives these from main.mjs via executeJavaScript. */
+    window.__setStatus = (message) => {
+      document.getElementById('status').textContent = message;
+      /* The one long step deserves an expectation-setter. */
+      document.getElementById('hint').textContent =
+        /one-time download/i.test(message)
+          ? 'This happens once and can take a few minutes.'
+          : '';
+    };
+    window.__setError = (message) => {
+      document.body.classList.add('error');
+      document.getElementById('status').textContent = message;
+      document.getElementById('hint').textContent =
+        'Details were written to the log — see the dialog for its location.';
+    };
+  </script>
+</body>
+</html>

@@ -7,7 +7,7 @@
 | Platform | Download | Status |
 |---|---|---|
 | **macOS** (Apple Silicon, macOS 13+) | [Simplicity-mac-arm64.dmg](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-mac-arm64.dmg) | Signed & notarized by Apple · opens clean · tested |
-| **Windows** (10/11, 64-bit) | [Simplicity-Setup-Windows.exe](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-Setup-Windows.exe) | **Beta — built cross-platform, not yet verified on real Windows hardware.** If it misbehaves, [open an issue](https://github.com/Blueturboguy07/Simplicity/issues). |
+| **Windows** (10/11, 64-bit) | [Simplicity-Setup-Windows.exe](https://github.com/Blueturboguy07/Simplicity/releases/latest/download/Simplicity-Setup-Windows.exe) | **Beta** — built natively on Windows CI; install and uninstall are machine-tested on every build. If it misbehaves, [open an issue](https://github.com/Blueturboguy07/Simplicity/issues). |
 
 ### First-open notes
 
@@ -23,7 +23,7 @@ The first run downloads the local search engine (~150 MB, one time). If you want
 
 ## ⚠️ Starting point, not a finished product
 
-This is an early beta — a starting point. The core loop (search → sources → cited answer) is solid and tested, but edges are rough: the Windows build is unverified on real hardware, some surfaces are still being brought to parity, and things will change fast. Use it, break it, [tell us what broke](https://github.com/Blueturboguy07/Simplicity/issues).
+This is an early beta — a starting point. The core loop (search → sources → cited answer) is solid and tested, but edges are rough: some surfaces are still being brought to parity, and things will change fast. Use it, break it, [tell us what broke](https://github.com/Blueturboguy07/Simplicity/issues).
 
 ## What it does
 

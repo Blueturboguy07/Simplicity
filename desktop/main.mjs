@@ -219,14 +219,39 @@ async function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  /* Show the splash before any provisioning starts. First run downloads and
+     installs local search (~150 MB) — minutes of work that used to happen
+     behind a bare black window, which reads as "the app is broken". */
+  let onSplash = true;
+  const splashCall = (fn, message) => {
+    if (!onSplash || !mainWindow) return;
+    mainWindow.webContents
+      .executeJavaScript(`window.${fn}(${JSON.stringify(String(message))})`)
+      .catch(() => {
+        /* window mid-navigation — the log file still has it */
+      });
+  };
+  try {
+    await mainWindow.loadFile(path.join(__dirname, 'splash.html'));
+  } catch {
+    onSplash = false; /* splash missing is cosmetic — keep booting */
+  }
   mainWindow.show();
 
+  const onStatus = (message) => {
+    log(message);
+    splashCall('__setStatus', message);
+  };
+
   try {
-    const url = await ensureRunning(log);
+    const url = await ensureRunning(onStatus);
+    onSplash = false;
     await mainWindow.loadURL(url);
     startHealthWatch();
   } catch (err) {
     log(`startup failed: ${err?.stack ?? err}`);
+    splashCall('__setError', err?.message ?? String(err));
     dialog.showErrorBox(
       'Simplicity could not start',
       `${err?.message ?? err}\n\nDetails were written to:\n${path.join(dataDir(), 'logs', 'simplicity.log')}`,
