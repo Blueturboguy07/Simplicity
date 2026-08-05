@@ -3,11 +3,10 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import MessageInput from './MessageInput';
 import MessageBox from './MessageBox';
-import MessageBoxLoading from './MessageBoxLoading';
 import { useChat } from '@/lib/hooks/useChat';
 
 const Chat = () => {
-  const { sections, loading, messageAppeared, messages } = useChat();
+  const { sections, messages } = useChat();
 
   const [dividerWidth, setDividerWidth] = useState(0);
   const dividerRef = useRef<HTMLDivElement | null>(null);
@@ -77,7 +76,9 @@ const Chat = () => {
           </Fragment>
         );
       })}
-      {loading && !messageAppeared && <MessageBoxLoading />}
+      {/* The loading state lives inside the last MessageBox now (in the answer
+          slot, where the text will appear) rather than as a detached skeleton
+          under the thread — see AnswerPending in MessageBox.tsx. */}
       <div ref={messageEnd} className="h-0" />
       {dividerWidth > 0 && (
         <div

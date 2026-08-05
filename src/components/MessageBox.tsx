@@ -3,7 +3,14 @@
 /* eslint-disable @next/next/no-img-element */
 import React, { MutableRefObject } from 'react';
 import { cn } from '@/lib/utils';
-import { Disc3, Volume2, StopCircle, Layers3, Plus, CornerDownRight } from 'lucide-react';
+import {
+  Disc3,
+  Volume2,
+  StopCircle,
+  Layers3,
+  Plus,
+  CornerDownRight,
+} from 'lucide-react';
 import Markdown, { MarkdownToJSX, RuleType } from 'markdown-to-jsx';
 import Copy from './MessageActions/Copy';
 import Rewrite from './MessageActions/Rewrite';
@@ -17,11 +24,34 @@ import Citation from './MessageRenderer/Citation';
 import { annotateCitations } from './MessageRenderer/citationParser';
 import AnswerTabs from './AnswerTabs';
 import AssistantSteps from './AssistantSteps';
-import { CouncilBlock, ResearchBlock, TextBlock, UsageBlock } from '@/lib/types';
+import {
+  CouncilBlock,
+  ResearchBlock,
+  TextBlock,
+  UsageBlock,
+} from '@/lib/types';
 import Renderer from './Widgets/Renderer';
 import CodeBlock from './MessageRenderer/CodeBlock';
 import UsageLine from './MessageRenderer/UsageLine';
 import CouncilBlockRenderer from './MessageRenderer/CouncilBlock';
+import MessageBoxLoading from './MessageBoxLoading';
+
+/* Shown wherever the answer text will land, for as long as the turn is
+   running with nothing written yet — the gap between "research done" and the
+   writer's first token is otherwise completely silent. */
+const AnswerPending = ({ label }: { label: string | null }) => (
+  <div className="flex flex-col space-y-3">
+    {label && (
+      <div className="flex flex-row items-center space-x-2">
+        <Disc3 className="w-4 h-4 text-black/50 dark:text-white/50 animate-spin" />
+        <span className="text-sm text-black/60 dark:text-white/60 animate-pulse">
+          {label}...
+        </span>
+      </div>
+    )}
+    <MessageBoxLoading />
+  </div>
+);
 
 const ThinkTagProcessor = ({
   children,
@@ -89,7 +119,37 @@ const MessageBox = ({
     (block): block is TextBlock => block.type === 'text',
   );
 
-  let rawAnswerText = rawTextBlocks.map((block) => block.data).join('\n\n');
+  const rawAnswerJoined = rawTextBlocks.map((block) => block.data).join('\n\n');
+
+  /* Is the answer slot still blank? Neither `hasContent` nor `messageAppeared`
+     can answer that: a reasoning model's first chunks arrive either as an
+     empty text block (openaiLLM forwards `delta.content || ''`) or as <think>
+     content that renders in its own collapsed box — both flip those flags
+     while the place the answer goes is still empty. Strip reasoning (including
+     an unterminated <think> that's still streaming) and see what's left. */
+  const answerText = rawAnswerJoined
+    .replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '')
+    .trim();
+
+  const answerPending = isLast && loading && answerText.length === 0;
+
+  const hasResearchSteps = section.message.responseBlocks.some(
+    (b) => b.type === 'research' && b.data.subSteps.length > 0,
+  );
+
+  /* While the steps card is live it already narrates what's happening, so the
+     placeholder stays silent and shows only the shimmer. Once research ends
+     (or never ran) the card goes quiet and the placeholder has to say why
+     nothing is on screen yet. */
+  const pendingLabel = !researchEnded
+    ? hasResearchSteps
+      ? null
+      : 'Brainstorming'
+    : thinkingEnded
+      ? 'Writing answer'
+      : 'Thinking';
+
+  let rawAnswerText = rawAnswerJoined;
 
   if (rawAnswerText.includes('<think>')) {
     const openThinkTag = rawAnswerText.match(/<think>/g)?.length || 0;
@@ -154,6 +214,11 @@ const MessageBox = ({
         </Markdown>
       </div>
 
+      {/* Deliberately outside the exported #answer-content div: a reasoning
+          model streams <think> first, so this sits under the collapsed
+          Thinking box until real prose starts. */}
+      {answerPending && <AnswerPending label={pendingLabel} />}
+
       {loading && isLast ? null : (
         <div className="w-full py-4">
           {usageBlock && (
@@ -163,7 +228,10 @@ const MessageBox = ({
           )}
           <div className="flex flex-row items-center justify-between w-full text-black dark:text-white">
             <div className="flex flex-row items-center -ml-2">
-              <Rewrite rewrite={rewrite} messageId={section.message.messageId} />
+              <Rewrite
+                rewrite={rewrite}
+                messageId={section.message.messageId}
+              />
             </div>
             <div className="flex flex-row items-center -mr-2">
               <Copy initialMessage={parsedMessage} section={section} />
@@ -257,21 +325,15 @@ const MessageBox = ({
               </div>
             ))}
 
-          {isLast &&
-            loading &&
-            !researchEnded &&
-            !section.message.responseBlocks.some(
-              (b) => b.type === 'research' && b.data.subSteps.length > 0,
-            ) && (
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-light-secondary dark:bg-dark-secondary border border-light-200 dark:border-dark-200">
-                <Disc3 className="w-4 h-4 text-black dark:text-white animate-spin" />
-                <span className="text-sm text-black/70 dark:text-white/70">
-                  Brainstorming...
-                </span>
-              </div>
-            )}
-
           {section.widgets.length > 0 && <Renderer widgets={section.widgets} />}
+
+          {/* No text block at all yet — nothing renders the answer slot, so the
+              placeholder stands in for it here. Once a block exists (even an
+              empty or reasoning-only one) the copy inside answerBody takes
+              over, which keeps it inside the Answer tab. */}
+          {answerPending && !hasContent && (
+            <AnswerPending label={pendingLabel} />
+          )}
 
           {hasContent && (
             <div className="flex flex-col space-y-2">
