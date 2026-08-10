@@ -116,6 +116,12 @@ class OllamaLLM extends BaseLLM<OllamaConfig> {
         })) || [],
       additionalInfo: {
         reasoning: res.message.thinking,
+        /* 'length' means Ollama stopped because it hit num_predict/num_ctx,
+           not because the model was done — the writer pipeline checks this
+           field (shared with the OpenAI provider's finish_reason, same
+           values) to tell a genuinely finished answer from one that was cut
+           off mid-thought. */
+        finishReason: res.done_reason,
       },
     };
   }
@@ -178,6 +184,12 @@ class OllamaLLM extends BaseLLM<OllamaConfig> {
         done: chunk.done,
         additionalInfo: {
           reasoning: chunk.message.thinking,
+          /* Only meaningful on the final chunk (chunk.done === true); 'length'
+             is Ollama's signal that generation was truncated by num_predict
+             or num_ctx rather than finishing on its own. Same field name and
+             values as the OpenAI provider's finish_reason so callers don't
+             need per-provider branches. */
+          finishReason: chunk.done ? chunk.done_reason : undefined,
         },
       };
     }

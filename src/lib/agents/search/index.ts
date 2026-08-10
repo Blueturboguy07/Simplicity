@@ -166,9 +166,18 @@ class SearchAgent {
     });
 
     let responseBlockId = '';
+    /* Only ever set on the terminal chunk. 'length' means the model was cut
+       off by num_predict/num_ctx (Ollama) or max_completion_tokens (OpenAI),
+       not that it actually finished — see OllamaLLM.streamText and
+       openaiLLM.ts for where this gets populated. */
+    let finishReason: string | undefined;
 
     for await (const chunk of answerStream) {
       if (input.config.signal?.aborted) break;
+
+      if (chunk.additionalInfo?.finishReason) {
+        finishReason = chunk.additionalInfo.finishReason;
+      }
 
       if (!responseBlockId) {
         const block: TextBlock = {
@@ -211,6 +220,23 @@ class SearchAgent {
       throw new Error(
         'The model returned an empty answer. Try again, or switch models — if this was Deep research, the gathered context may have exceeded what this model accepts.',
       );
+    }
+
+    /* A non-empty answer that stopped because it ran out of room (context
+       window or output-token cap, most often hit by small local models)
+       still ends this turn "successfully" — there's no error to catch. Left
+       alone, that reads as the model simply going silent mid-sentence with
+       no explanation, which is exactly what got reported: "what do I do when
+       the ai does not respond or gets truncated". Appending a visible notice
+       to the same block the user is already reading means it survives page
+       reloads and history the same way the answer itself does, unlike a
+       toast. */
+    if (!input.config.signal?.aborted && finishReason === 'length' && answerBlock) {
+      answerBlock.data +=
+        '\n\n---\n*Response cut off — this model reached its context or output limit before finishing. Start a new chat, or switch to a model with a larger context window, to get the rest of the answer.*';
+      session.updateBlock(answerBlock.id, [
+        { op: 'replace', path: '/data', value: answerBlock.data },
+      ]);
     }
 
     if (input.config.usageMeter) {
