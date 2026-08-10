@@ -17,7 +17,11 @@
 
 ### First launch
 
-The first run downloads the local search engine (~150 MB, one time). If you want free local AI models, the setup screen installs [Ollama](https://ollama.com) for you with one click — or plug in an API key (OpenAI, Anthropic, Google, Groq, xAI) or connect your existing Claude subscription for free frontier-model answers.
+The first run downloads the local search engine (~150 MB, one time). If you want free local AI models, the setup screen installs [Ollama](https://ollama.com) for you with one click on macOS (Windows: install Ollama yourself from [ollama.com/download](https://ollama.com/download), then click Install again — Simplicity picks it up automatically) — or plug in an API key (OpenAI, Anthropic, Google, Groq, xAI) or connect your existing Claude subscription for free frontier-model answers.
+
+### Uninstalling
+
+See [UNINSTALL.md](UNINSTALL.md) for exactly what Simplicity writes to disk and how to remove all of it — on macOS, `./scripts/uninstall.sh` does it in one step.
 
 ---
 
