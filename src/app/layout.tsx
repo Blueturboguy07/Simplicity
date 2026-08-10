@@ -54,19 +54,24 @@ export default function RootLayout({
           {setupComplete ? (
             <ChatProvider>
               <Sidebar>{children}</Sidebar>
-              <Toaster
-                toastOptions={{
-                  unstyled: true,
-                  classNames: {
-                    toast:
-                      'bg-light-secondary dark:bg-dark-secondary dark:text-white/70 text-black-70 rounded-lg p-4 flex flex-row items-center space-x-2',
-                  },
-                }}
-              />
             </ChatProvider>
           ) : (
             <SetupWizard configSections={configSections} />
           )}
+          {/* Rendered unconditionally: onboarding (setupComplete === false)
+              calls toast.error/toast.success too (see ProviderPicker's
+              provider-connect flows), and with no <Toaster/> mounted those
+              calls silently no-op — a failure looks identical to nothing
+              happening at all. See the Ollama install bug this fixed. */}
+          <Toaster
+            toastOptions={{
+              unstyled: true,
+              classNames: {
+                toast:
+                  'bg-light-secondary dark:bg-dark-secondary dark:text-white/70 text-black-70 rounded-lg p-4 flex flex-row items-center space-x-2',
+              },
+            }}
+          />
         </ThemeProvider>
       </body>
     </html>
