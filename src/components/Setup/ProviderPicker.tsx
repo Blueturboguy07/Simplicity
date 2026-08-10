@@ -6,6 +6,7 @@ import {
 } from '@/lib/config/types';
 import ProviderLogo from '@/components/ui/ProviderLogo';
 import {
+  AlertCircle,
   Check,
   ExternalLink,
   Info,
@@ -27,7 +28,8 @@ import { cn } from '@/lib/utils';
 const providerInfo: Record<string, { free: boolean; blurb: string }> = {
   ollama: {
     free: true,
-    blurb: 'Installs and runs on your computer. No account or key needed.',
+    blurb:
+      'Free — runs on your computer. No account, no key, nothing to pay.',
   },
   anthropic: {
     free: false,
@@ -88,6 +90,14 @@ const ProviderRow = ({
   const [tier, setTier] = useState('balanced');
   const [progress, setProgress] = useState<string | null>(null);
   const [percent, setPercent] = useState<number | null>(null);
+  /* Install failures also go through toast.error below, but a toast alone
+     isn't loud enough here: it auto-dismisses in a few seconds, and if it
+     fires while the setup wizard's entrance animation is mid-transition it
+     can be missed entirely. This is the "click Install, it spins for a
+     second, and silently goes back to the button" bug — the fix is a message
+     that stays on screen until the user retries or dismisses it, not a toast
+     that can pass by unread. */
+  const [installError, setInstallError] = useState<string | null>(null);
 
   const info = providerInfo[provider.key];
   const field = keyField(provider.fields as UIConfigField[]);
@@ -97,6 +107,7 @@ const ProviderRow = ({
      work is minutes long — a bare spinner would look hung. */
   const install = async () => {
     setLoading(true);
+    setInstallError(null);
     setProgress('Starting…');
     try {
       const res = await fetch('/api/local-runtime/ollama', {
@@ -132,7 +143,9 @@ const ProviderRow = ({
         }
       }
     } catch (err: any) {
-      toast.error(err?.message ?? "Couldn't set up local AI.");
+      const message = err?.message ?? "Couldn't set up local AI.";
+      setInstallError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
       setProgress(null);
@@ -226,12 +239,13 @@ const ProviderRow = ({
   return (
     <div
       className={cn(
-        'flex flex-row items-center gap-3 md:gap-4 rounded-xl border px-3 md:px-4 py-3',
+        'flex flex-col gap-2 rounded-xl border px-3 md:px-4 py-3',
         connected
           ? 'border-[#24A0ED]/40 bg-[#24A0ED]/5'
           : 'border-light-200 dark:border-dark-200 bg-light-secondary/30 dark:bg-dark-secondary/30',
       )}
     >
+      <div className="flex flex-row items-center gap-3 md:gap-4">
       <ProviderLogo
         providerKey={provider.key}
         size={24}
@@ -355,6 +369,27 @@ const ProviderRow = ({
               <ExternalLink className="h-2.5 w-2.5" />
             </a>
           )}
+        </div>
+      )}
+      </div>
+
+      {/* Stays up until the next attempt (see install()'s setInstallError(null))
+          or it's dismissed — a toast alone can pass by unread, and reverting
+          straight to the bare "Install" button with no trace of what happened
+          is the exact bug this fixes: a failed install looked identical to a
+          button that silently did nothing. */}
+      {installError && (
+        <div className="flex flex-row items-start gap-2 text-[11px] sm:text-xs text-red-500 dark:text-red-400 rounded-lg bg-red-50 dark:bg-red-950/20 px-3 py-2 border border-red-200 dark:border-red-900/30">
+          <AlertCircle size={14} className="shrink-0 mt-0.5" />
+          <span className="break-words flex-1">{installError}</span>
+          <button
+            type="button"
+            onClick={() => setInstallError(null)}
+            aria-label="Dismiss"
+            className="shrink-0 text-red-500/60 hover:text-red-500 dark:text-red-400/60 dark:hover:text-red-400 transition-colors"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
     </div>
