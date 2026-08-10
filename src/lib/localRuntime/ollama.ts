@@ -80,13 +80,23 @@ async function findBinary(): Promise<string | null> {
     /* not on PATH */
   }
 
-  const candidates = [
-    path.join(binDir(), process.platform === 'win32' ? 'ollama.exe' : 'ollama'),
-    '/usr/local/bin/ollama',
-    '/opt/homebrew/bin/ollama',
-    `${process.env.HOME}/.local/bin/ollama`,
-    '/Applications/Ollama.app/Contents/Resources/ollama',
-  ];
+  const candidates =
+    process.platform === 'win32'
+      ? [
+          path.join(binDir(), 'ollama.exe'),
+          /* The official Windows installer is a per-user install under
+             LOCALAPPDATA; a system-wide install under Program Files also
+             happens (e.g. via winget), so both are worth checking. */
+          `${process.env.LOCALAPPDATA}\\Programs\\Ollama\\ollama.exe`,
+          `${process.env.ProgramFiles}\\Ollama\\ollama.exe`,
+        ]
+      : [
+          path.join(binDir(), 'ollama'),
+          '/usr/local/bin/ollama',
+          '/opt/homebrew/bin/ollama',
+          `${process.env.HOME}/.local/bin/ollama`,
+          '/Applications/Ollama.app/Contents/Resources/ollama',
+        ];
   return candidates.find((c) => fs.existsSync(c)) ?? null;
 }
 
@@ -95,8 +105,15 @@ async function downloadBinary(onLog: (m: string) => void): Promise<string> {
   fs.mkdirSync(dir, { recursive: true });
 
   if (process.platform !== 'darwin') {
+    /* Real gap, not a bug to paper over: we only know how to unpack the
+       macOS build here (see DARWIN_TGZ below). The button above this error
+       is always labeled "Install" — never "Connect" — so the message has to
+       say to click that, or a careful reader ends up looking for a control
+       that doesn't exist. Once Ollama is on this machine, findBinary() above
+       picks it up on the very next call, so re-clicking Install is genuinely
+       enough to finish setup — this isn't a dead end. */
     throw new Error(
-      "Automatic setup isn't available on this platform yet. Install Ollama from https://ollama.com/download, then click Connect again.",
+      "Automatic download isn't available on this platform yet. Install Ollama yourself from https://ollama.com/download, then click Install again — Simplicity will detect it and finish setup from there.",
     );
   }
 
