@@ -79,7 +79,10 @@ class FakeEmbedding extends BaseEmbedding<any> {
    (writingMode: true below already guarantees that too), keeping this test
    focused purely on the db guard rather than the retrieval pipeline. */
 class FakeLLM extends BaseLLM<any> {
-  constructor(private chunks: string[]) {
+  constructor(
+    private chunks: string[],
+    private finishReason?: string,
+  ) {
     super({});
   }
   async generateText(): Promise<any> {
@@ -89,7 +92,14 @@ class FakeLLM extends BaseLLM<any> {
     for (const chunk of this.chunks) {
       yield { contentChunk: chunk, toolCallChunk: [] };
     }
-    yield { contentChunk: '', toolCallChunk: [], done: true };
+    yield {
+      contentChunk: '',
+      toolCallChunk: [],
+      done: true,
+      additionalInfo: this.finishReason
+        ? { finishReason: this.finishReason }
+        : undefined,
+    };
   }
   async generateObject<T>(): Promise<any> {
     return {
@@ -181,6 +191,71 @@ describe('SearchAgent incognito guard', () => {
 
     /* The stream itself is unaffected — blocks still flow through
        SessionManager even though nothing was persisted. */
+    const textBlock = session
+      .getAllBlocks()
+      .find((b) => b.type === 'text') as TextBlock;
+    expect(textBlock?.data).toBe('Answer text.');
+  });
+});
+
+describe('SearchAgent truncation notice', () => {
+  it('appends a visible cut-off notice when the model stops on finishReason "length"', async () => {
+    const config = makeConfig({
+      llm: new FakeLLM(['Partial answer, still going'], 'length'),
+    });
+    const session = SessionManager.createSession();
+    const { chatId, messageId } = nextIds();
+
+    await new SearchAgent().searchAsync(session, {
+      chatHistory: [],
+      followUp: 'test query',
+      chatId,
+      messageId,
+      config,
+    });
+
+    const textBlock = session
+      .getAllBlocks()
+      .find((b) => b.type === 'text') as TextBlock;
+    expect(textBlock?.data).toContain('Partial answer, still going');
+    expect(textBlock?.data).toContain('Response cut off');
+    expect(textBlock?.data).toContain('larger context window');
+  });
+
+  it('adds no notice when the model finishes normally (finishReason "stop")', async () => {
+    const config = makeConfig({
+      llm: new FakeLLM(['Complete answer.'], 'stop'),
+    });
+    const session = SessionManager.createSession();
+    const { chatId, messageId } = nextIds();
+
+    await new SearchAgent().searchAsync(session, {
+      chatHistory: [],
+      followUp: 'test query',
+      chatId,
+      messageId,
+      config,
+    });
+
+    const textBlock = session
+      .getAllBlocks()
+      .find((b) => b.type === 'text') as TextBlock;
+    expect(textBlock?.data).toBe('Complete answer.');
+  });
+
+  it('adds no notice when the provider never reports a finishReason at all (baseline FakeLLM)', async () => {
+    const config = makeConfig({ llm: new FakeLLM(['Answer text.']) });
+    const session = SessionManager.createSession();
+    const { chatId, messageId } = nextIds();
+
+    await new SearchAgent().searchAsync(session, {
+      chatHistory: [],
+      followUp: 'test query',
+      chatId,
+      messageId,
+      config,
+    });
+
     const textBlock = session
       .getAllBlocks()
       .find((b) => b.type === 'text') as TextBlock;
