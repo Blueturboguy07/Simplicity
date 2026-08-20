@@ -57,17 +57,52 @@ const ModelSelector = () => {
   const mainRows = rows.filter((r) => !r.row.extra);
   const extraRows = rows.filter((r) => r.row.extra);
 
+  /* Models a provider fetched from its own /models endpoint — honest keys the
+     catalog doesn't know about (e.g. an OpenAI-Compatible connection serving
+     "llama-3.1-70b"). Nothing resolves through the catalog, so they get their
+     own section below it. */
+  const dynamicRows = useMemo<ResolvedRow[]>(() => {
+    const out: ResolvedRow[] = [];
+    providers.forEach((p) => {
+      const coveredKeys = new Set(
+        rows.filter((r) => r.providerId === p.id).map((r) => r.key),
+      );
+      const seen = new Set<string>();
+      p.chatModels.forEach((m) => {
+        if (coveredKeys.has(m.key) || seen.has(m.key)) return;
+        seen.add(m.key);
+        out.push({
+          row: {
+            id: `dynamic-${p.id}-${m.key}`,
+            name: m.name || m.key,
+            icon: p.type,
+            candidates: [],
+          },
+          providerId: p.id,
+          key: m.key,
+          free: false,
+        });
+      });
+    });
+    return out;
+  }, [providers, rows]);
+
+  const selectableRows = useMemo(
+    () => [...rows, ...dynamicRows],
+    [rows, dynamicRows],
+  );
+
   const best = resolveBest(providers);
   const isBestSelected = chatModelProvider?.key === BEST_KEY;
 
   const selectedRow = useMemo(
     () =>
-      rows.find(
+      selectableRows.find(
         (r) =>
           r.providerId === chatModelProvider?.providerId &&
           r.key === chatModelProvider?.key,
       ) ?? null,
-    [rows, chatModelProvider],
+    [selectableRows, chatModelProvider],
   );
 
   /* Button label: the row name, with a grayed "Thinking" suffix when the
@@ -227,7 +262,7 @@ const ModelSelector = () => {
                           size={22}
                         />
                       </div>
-                    ) : rows.length === 0 && !best ? (
+                    ) : selectableRows.length === 0 && !best ? (
                       <div className="text-center py-12 px-4 text-black/60 dark:text-white/60 text-sm">
                         No models connected
                       </div>
@@ -285,6 +320,16 @@ const ModelSelector = () => {
                           <>
                             <div className="h-px bg-light-200 dark:bg-dark-200 my-1.5" />
                             {extraRows.map(renderRow)}
+                          </>
+                        )}
+
+                        {dynamicRows.length > 0 && (
+                          <>
+                            <div className="h-px bg-light-200 dark:bg-dark-200 my-1.5" />
+                            <p className="px-3 pt-1.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-black/40 dark:text-white/40">
+                              From your connections
+                            </p>
+                            {dynamicRows.map(renderRow)}
                           </>
                         )}
                       </div>
