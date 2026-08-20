@@ -9,6 +9,7 @@ import LemonadeProvider from './lemonade';
 import AnthropicProvider from './anthropic';
 import ClaudeCodeProvider from './claudecode';
 import XAIProvider from './xai';
+import OpenAICompatibleProvider from './openaicompatible';
 
 export const providers: Record<string, ProviderConstructor<any>> = {
   openai: OpenAIProvider,
@@ -20,6 +21,7 @@ export const providers: Record<string, ProviderConstructor<any>> = {
   anthropic: AnthropicProvider,
   claudecode: ClaudeCodeProvider,
   xai: XAIProvider,
+  openaicompatible: OpenAICompatibleProvider,
 };
 
 export const getModelProvidersUIConfigSection =

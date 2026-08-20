@@ -23,6 +23,7 @@ const brands: Record<string, { icon?: IconType; letters?: string }> = {
   groq: { letters: 'G' },
   lemonade: { letters: 'L' },
   xai: { letters: 'X' },
+  openaicompatible: { letters: 'OC' },
 };
 
 const ProviderLogo = ({
