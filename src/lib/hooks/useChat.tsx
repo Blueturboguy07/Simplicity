@@ -519,7 +519,11 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     const stored = localStorage.getItem('searchMode');
-    if (stored === 'search' || stored === 'deepResearch' || stored === 'council') {
+    if (
+      stored === 'search' ||
+      stored === 'deepResearch' ||
+      stored === 'council'
+    ) {
       setSearchModeState(stored);
     }
   }, []);
@@ -615,7 +619,16 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
 
     return async (data: any) => {
       if (data.type === 'error') {
-        toast.error(data.data);
+        const errorData =
+          data.data && typeof data.data === 'object' && 'message' in data.data
+            ? (data.data as {
+                message: string;
+                action?: { label: string; href: string };
+              })
+            : String(data.data ?? 'Something went wrong.');
+        toast.error(
+          typeof errorData === 'string' ? errorData : errorData.message,
+        );
         setLoading(false);
         setResearchEnded(true);
         /* The toast vanishes in seconds — the turn itself must show the
@@ -632,7 +645,7 @@ export const ChatProvider = ({ children }: { children: React.ReactNode }) => {
                     {
                       id: crypto.randomUUID(),
                       type: 'error',
-                      data: String(data.data ?? 'Something went wrong.'),
+                      data: errorData,
                     } as any,
                   ],
                 }

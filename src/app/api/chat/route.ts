@@ -17,6 +17,9 @@ import { and, eq } from 'drizzle-orm';
 import { chats, messages as messagesSchema } from '@/lib/db/schema';
 import UploadManager from '@/lib/uploads/manager';
 import { UsageMeter, LLMUsage } from '@/lib/pricing/meter';
+import { PublikCreditError, PublikRevokedError } from '@/lib/publik/errors';
+import { handleKeyRevoked, readState } from '@/lib/publik/provision';
+import { PUBLIK_ACCOUNT_URL } from '@/lib/publik/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -89,6 +92,46 @@ const safeValidateBody = (data: unknown) => {
     success: true,
     data: result.data,
   };
+};
+
+/* The two gateway answers that need more than a message (CONTRACT §1):
+     402 → the message plus exactly ONE link, top_up_url
+     401 key_revoked → reprovision:true re-mints silently and asks for a
+                       retry; reprovision:false says "disconnected" */
+const describeError = async (
+  err: any,
+): Promise<
+  string | { message: string; action?: { label: string; href: string } }
+> => {
+  if (err instanceof PublikCreditError) {
+    const state = readState();
+    const href = err.topUpUrl ?? state?.claimUrl ?? PUBLIK_ACCOUNT_URL;
+    const claimed = state?.claimState === 'claimed';
+    return {
+      message:
+        err.errorType === 'model_requires_claim'
+          ? `${err.message} Link this computer to your publik account to use this tier, or pick Balanced or Fast.`
+          : claimed
+            ? `publik API needs credit. ${err.message} Add credit to keep searching, or use your own key in Settings.`
+            : `publik API needs credit. Your free balance is used up. Link this computer to your publik account to add credit, or use your own key in Settings.`,
+      action: {
+        label: claimed ? 'Add credit' : 'Link this computer',
+        href,
+      },
+    };
+  }
+  if (err instanceof PublikRevokedError) {
+    const result = await handleKeyRevoked(err.reprovision);
+    if (result === 'active') {
+      return 'publik API reconnected this computer. Ask again to continue.';
+    }
+    return {
+      message:
+        'publik API is disconnected. This computer was removed from your publik account. Reconnect it from Settings → Models, or use your own key.',
+      action: { label: 'Open publikhq.com', href: PUBLIK_ACCOUNT_URL },
+    };
+  }
+  return err?.message ?? 'That model failed to answer. Try a different one.';
 };
 
 /* Pipeline internals (classification, query planning, refinement,
@@ -271,17 +314,19 @@ export const POST = async (req: Request) => {
     let councilMembers: CouncilMemberSpec[] = [];
 
     if (isCouncil && chairPick) {
-      const [memberLLMs, chairLLM, embeddingModel, utility] = await Promise.all([
-        Promise.all(
-          pickedRows.map((r) => registry.loadChatModel(r.providerId, r.key)),
-        ),
-        registry.loadChatModel(chairPick.providerId, chairPick.key),
-        registry.loadEmbeddingModel(
-          body.embeddingModel.providerId,
-          body.embeddingModel.key,
-        ),
-        resolveUtilityLLM(registry, providers, chairPick),
-      ]);
+      const [memberLLMs, chairLLM, embeddingModel, utility] = await Promise.all(
+        [
+          Promise.all(
+            pickedRows.map((r) => registry.loadChatModel(r.providerId, r.key)),
+          ),
+          registry.loadChatModel(chairPick.providerId, chairPick.key),
+          registry.loadEmbeddingModel(
+            body.embeddingModel.providerId,
+            body.embeddingModel.key,
+          ),
+          resolveUtilityLLM(registry, providers, chairPick),
+        ],
+      );
 
       councilMembers = pickedRows.map((r, i) => {
         const providerType = typeOf(r.providerId);
@@ -463,8 +508,7 @@ export const POST = async (req: Request) => {
       console.error('Search failed:', err);
       safeWrite({
         type: 'error',
-        data:
-          err?.message ?? 'That model failed to answer. Try a different one.',
+        data: await describeError(err),
       });
       safeClose();
       session.removeAllListeners();

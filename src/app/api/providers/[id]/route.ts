@@ -1,5 +1,8 @@
 import ModelRegistry from '@/lib/models/registry';
 import { NextRequest } from 'next/server';
+import configManager from '@/lib/config';
+import { ConfigModelProvider } from '@/lib/config/types';
+import { declinePublik } from '@/lib/publik/provision';
 
 export const DELETE = async (
   req: NextRequest,
@@ -19,8 +22,18 @@ export const DELETE = async (
       );
     }
 
-    const registry = new ModelRegistry();
-    await registry.removeProvider(id);
+    /* Deleting the publik connection is "use my own key instead" — pin the
+       choice so it never comes back on its own. Every other provider is
+       removed exactly as before. */
+    const doomed = (
+      configManager.getConfig('modelProviders', []) as ConfigModelProvider[]
+    ).find((p) => p.id === id);
+    if (doomed?.type === 'publik') {
+      declinePublik();
+    } else {
+      const registry = new ModelRegistry();
+      await registry.removeProvider(id);
+    }
 
     return Response.json(
       {

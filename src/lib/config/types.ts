@@ -73,6 +73,14 @@ type Config = {
   search: {
     [key: string]: any;
   };
+  /* publik API provisioning state (src/lib/publik/types.ts PublikState).
+     State only — the key itself lives in modelProviders[] like any other
+     connection. Absent on dev/Docker/source builds. */
+  publik?: {
+    installId: string;
+    state: 'pending' | 'active' | 'declined' | 'disconnected';
+    [key: string]: any;
+  };
 };
 
 type EnvMap = {
