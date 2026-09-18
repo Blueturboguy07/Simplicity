@@ -50,9 +50,9 @@ export const PUBLIK_PROVIDER_TYPE = 'publik';
 export const PUBLIK_PROVIDER_NAME = 'publik API';
 
 export const publikProvider = (): ConfigModelProvider | undefined =>
-  configManager
-    .getConfig('modelProviders', [] as ConfigModelProvider[])
-    .find((p) => p.type === PUBLIK_PROVIDER_TYPE);
+  (configManager.getConfig('modelProviders', []) as ConfigModelProvider[]).find(
+    (p) => p.type === PUBLIK_PROVIDER_TYPE,
+  );
 
 export const readState = (): PublikState | undefined =>
   configManager.getConfig('publik', undefined);
@@ -81,7 +81,10 @@ const osName = (): 'macos' | 'windows' | 'linux' => {
 
 const deviceName = (): string | undefined => {
   try {
-    const name = os.hostname().replace(/\.local$/, '').trim();
+    const name = os
+      .hostname()
+      .replace(/\.local$/, '')
+      .trim();
     return name ? name.slice(0, 120) : undefined;
   } catch {
     return undefined;
@@ -95,7 +98,8 @@ const tierModels = (
   const out: Partial<Record<PublikTier, string>> = {};
   for (const tier of ['fast', 'balanced', 'smart'] as PublikTier[]) {
     const v = models[tier];
-    if (typeof v === 'string' && /^[a-z0-9._:/-]{1,64}$/i.test(v)) out[tier] = v;
+    if (typeof v === 'string' && /^[a-z0-9._:/-]{1,64}$/i.test(v))
+      out[tier] = v;
   }
   return Object.keys(out).length ? out : undefined;
 };
@@ -110,10 +114,17 @@ export const publikModels = (): Record<PublikTier, string> => ({
 const mint = async (
   installId: string,
   deps: ProvisionDeps,
-): Promise<{ status: number; body: InstallResponse | null; retryAfter: string | null }> => {
+): Promise<{
+  status: number;
+  body: InstallResponse | null;
+  retryAfter: string | null;
+}> => {
   const env = deps.env ?? process.env;
   const token = env.PUBLIK_APP_TOKEN!;
-  const baseURL = (env.PUBLIK_API_BASE_URL || PUBLIK_BASE_URL_DEFAULT).replace(/\/$/, '');
+  const baseURL = (env.PUBLIK_API_BASE_URL || PUBLIK_BASE_URL_DEFAULT).replace(
+    /\/$/,
+    '',
+  );
 
   const res = await (deps.fetch ?? fetch)(`${baseURL}/installs`, {
     method: 'POST',
@@ -124,7 +135,8 @@ const mint = async (
     body: JSON.stringify({
       app_token: token,
       app_slug: PUBLIK_APP_SLUG,
-      app_version: env.PUBLIK_APP_VERSION || process.env.NEXT_PUBLIC_VERSION || '0.0.0',
+      app_version:
+        env.PUBLIK_APP_VERSION || process.env.NEXT_PUBLIC_VERSION || '0.0.0',
       os: osName(),
       os_version: os.release(),
       arch: process.arch,
@@ -142,7 +154,11 @@ const mint = async (
   } catch {
     body = null;
   }
-  return { status: res.status, body, retryAfter: res.headers.get('retry-after') };
+  return {
+    status: res.status,
+    body,
+    retryAfter: res.headers.get('retry-after'),
+  };
 };
 
 /* Idempotent. Safe to call on every boot, from the accept/retry routes and
@@ -166,7 +182,10 @@ export async function ensureProvisioned(
   let installId = state?.installId ?? newId();
   if (!state?.installId) writeState({ installId, state: 'pending' });
 
-  const baseURL = (env.PUBLIK_API_BASE_URL || PUBLIK_BASE_URL_DEFAULT).replace(/\/$/, '');
+  const baseURL = (env.PUBLIK_API_BASE_URL || PUBLIK_BASE_URL_DEFAULT).replace(
+    /\/$/,
+    '',
+  );
 
   try {
     let { status, body, retryAfter } = await mint(installId, deps);
@@ -195,7 +214,11 @@ export async function ensureProvisioned(
     if (status !== 201 && status !== 200) {
       throw new Error(`installs returned ${status}`);
     }
-    if (!body || typeof body.key !== 'string' || !PUBLIK_KEY_RE.test(body.key)) {
+    if (
+      !body ||
+      typeof body.key !== 'string' ||
+      !PUBLIK_KEY_RE.test(body.key)
+    ) {
       throw new Error('installs returned a malformed key');
     }
 
@@ -215,7 +238,8 @@ export async function ensureProvisioned(
       state: 'active',
       installId,
       claimUrl: typeof body.claim_url === 'string' ? body.claim_url : undefined,
-      claimCode: typeof body.claim_code === 'string' ? body.claim_code : undefined,
+      claimCode:
+        typeof body.claim_code === 'string' ? body.claim_code : undefined,
       claimState: body.claim_state === 'claimed' ? 'claimed' : 'anonymous',
       models: tierModels(body.models),
       starterMicros: typeof starter === 'number' ? starter : undefined,
@@ -281,7 +305,8 @@ export function resetPublik() {
    consent. */
 export async function retryPublik(deps: ProvisionDeps = {}) {
   const state = readState();
-  if (state?.state === 'pending') writeState({ lastError: undefined, retryAfter: undefined });
+  if (state?.state === 'pending')
+    writeState({ lastError: undefined, retryAfter: undefined });
   return ensureProvisioned(deps);
 }
 
@@ -299,7 +324,10 @@ export async function handleKeyRevoked(
   if (existing) configManager.removeModelProvider(existing.id);
   publikBalance.reset();
   if (!reprovision) {
-    writeState({ state: 'disconnected', lastError: 'removed from your publik account' });
+    writeState({
+      state: 'disconnected',
+      lastError: 'removed from your publik account',
+    });
     return 'disconnected';
   }
   writeState({ state: 'pending', lastError: undefined });

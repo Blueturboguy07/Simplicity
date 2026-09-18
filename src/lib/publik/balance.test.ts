@@ -73,14 +73,22 @@ describe('PublikBalanceCache.read — GET /wallet fallback', () => {
           balance_micros: 930000,
           claim_state: 'claimed',
           starter: { remaining_micros: 0 },
-          week: { used_micros: 1000, budget_micros: 1850000, resets_at: '2026-09-25T00:00:00Z' },
+          week: {
+            used_micros: 1000,
+            budget_micros: 1850000,
+            resets_at: '2026-09-25T00:00:00Z',
+          },
           claim_url: null,
           add_credit_url: 'https://publikhq.com/dashboard/api/add',
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     });
-    const s = await c.read('https://publikhq.com/api/v1/', 'pk_live_x', fetchImpl as any);
+    const s = await c.read(
+      'https://publikhq.com/api/v1/',
+      'pk_live_x',
+      fetchImpl as any,
+    );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(s.balanceMicros).toBe(930000);
     expect(s.claimState).toBe('claimed');
@@ -93,7 +101,11 @@ describe('PublikBalanceCache.read — GET /wallet fallback', () => {
     const c = new PublikBalanceCache();
     c.observe(headers({ 'x-publik-balance': '42' }));
     const fetchImpl = vi.fn();
-    const s = await c.read('https://publikhq.com/api/v1', 'k', fetchImpl as any);
+    const s = await c.read(
+      'https://publikhq.com/api/v1',
+      'k',
+      fetchImpl as any,
+    );
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(s.balanceMicros).toBe(42);
   });
@@ -103,7 +115,11 @@ describe('PublikBalanceCache.read — GET /wallet fallback', () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
     });
-    const s = await c.read('https://publikhq.com/api/v1', 'k', fetchImpl as any);
+    const s = await c.read(
+      'https://publikhq.com/api/v1',
+      'k',
+      fetchImpl as any,
+    );
     expect(s.balanceMicros).toBeNull();
   });
 });

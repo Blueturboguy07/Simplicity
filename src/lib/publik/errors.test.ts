@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { mapPublikError, PublikCreditError, PublikRevokedError } from './errors';
+import {
+  mapPublikError,
+  PublikCreditError,
+  PublikRevokedError,
+} from './errors';
 
 /* The 402 / 401 mapping (CONTRACT §1). Fake APIError-shaped objects: the
    SDK's APIError carries `status` and the parsed `error` body — that is
@@ -60,12 +64,20 @@ describe('mapPublikError — 402', () => {
 
   it('falls back to claim_url, then add_credit_url, then null when top_up_url is absent', () => {
     expect(
-      (mapPublikError(apiError(402, { claim_url: 'https://publikhq.com/claim/A' })) as PublikCreditError)
-        .topUpUrl,
+      (
+        mapPublikError(
+          apiError(402, { claim_url: 'https://publikhq.com/claim/A' }),
+        ) as PublikCreditError
+      ).topUpUrl,
     ).toBe('https://publikhq.com/claim/A');
     expect(
-      (mapPublikError(apiError(402, { add_credit_url: 'https://publikhq.com/dashboard/api/add' })) as PublikCreditError)
-        .topUpUrl,
+      (
+        mapPublikError(
+          apiError(402, {
+            add_credit_url: 'https://publikhq.com/dashboard/api/add',
+          }),
+        ) as PublikCreditError
+      ).topUpUrl,
     ).toBe('https://publikhq.com/dashboard/api/add');
     const bare = mapPublikError(apiError(402, null)) as PublikCreditError;
     expect(bare.topUpUrl).toBeNull();
@@ -76,7 +88,11 @@ describe('mapPublikError — 402', () => {
 describe('mapPublikError — 401 key_revoked', () => {
   it('reprovision:true → PublikRevokedError(reprovision=true)', () => {
     const e = mapPublikError(
-      apiError(401, { type: 'key_revoked', message: 'revoked', reprovision: true }),
+      apiError(401, {
+        type: 'key_revoked',
+        message: 'revoked',
+        reprovision: true,
+      }),
     ) as PublikRevokedError;
     expect(e).toBeInstanceOf(PublikRevokedError);
     expect(e.reprovision).toBe(true);
@@ -84,11 +100,18 @@ describe('mapPublikError — 401 key_revoked', () => {
 
   it('reprovision:false (or missing) → reprovision=false', () => {
     expect(
-      (mapPublikError(apiError(401, { type: 'key_revoked', reprovision: false })) as PublikRevokedError)
-        .reprovision,
+      (
+        mapPublikError(
+          apiError(401, { type: 'key_revoked', reprovision: false }),
+        ) as PublikRevokedError
+      ).reprovision,
     ).toBe(false);
     expect(
-      (mapPublikError(apiError(401, { type: 'key_revoked' })) as PublikRevokedError).reprovision,
+      (
+        mapPublikError(
+          apiError(401, { type: 'key_revoked' }),
+        ) as PublikRevokedError
+      ).reprovision,
     ).toBe(false);
   });
 

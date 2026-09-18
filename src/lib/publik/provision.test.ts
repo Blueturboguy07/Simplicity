@@ -1,4 +1,13 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import http from 'node:http';
 import { AddressInfo } from 'node:net';
 import { hashObj } from '@/lib/utils/hash';
@@ -51,7 +60,8 @@ vi.mock('@/lib/config', async () => {
       const parts = key.split('.');
       let target: any = store.config;
       for (let i = 0; i < parts.length - 1; i++) {
-        if (target[parts[i]] === null || typeof target[parts[i]] !== 'object') target[parts[i]] = {};
+        if (target[parts[i]] === null || typeof target[parts[i]] !== 'object')
+          target[parts[i]] = {};
         target = target[parts[i]];
       }
       target[parts[parts.length - 1]] = val;
@@ -70,7 +80,9 @@ vi.mock('@/lib/config', async () => {
       return p;
     },
     removeModelProvider: (id: string) => {
-      store.config.modelProviders = store.config.modelProviders.filter((p: any) => p.id !== id);
+      store.config.modelProviders = store.config.modelProviders.filter(
+        (p: any) => p.id !== id,
+      );
     },
     getCurrentConfig: () => JSON.parse(JSON.stringify(store.config)),
   };
@@ -87,7 +99,11 @@ import {
   resetPublik,
   retryPublik,
 } from './provision';
-import { DISCLOSURE_VERSION, PUBLIK_BASE_URL_DEFAULT, PUBLIK_KEY_RE } from './types';
+import {
+  DISCLOSURE_VERSION,
+  PUBLIK_BASE_URL_DEFAULT,
+  PUBLIK_KEY_RE,
+} from './types';
 import { publikBalance } from './balance';
 
 /* ---- fake gateway ------------------------------------------------------ */
@@ -102,7 +118,11 @@ const okBody = (overrides: Record<string, any> = {}) => ({
   key: KEY,
   key_id: 'a8k2m9x4q7v1',
   base_url: null,
-  models: { fast: 'publik-fast', balanced: 'publik-balanced', smart: 'publik-smart' },
+  models: {
+    fast: 'publik-fast',
+    balanced: 'publik-balanced',
+    smart: 'publik-smart',
+  },
   claim_code: 'HK7F-2QWD',
   claim_url: 'https://publikhq.com/claim/HK7F-2QWD',
   claim_state: 'anonymous',
@@ -115,7 +135,11 @@ const okBody = (overrides: Record<string, any> = {}) => ({
 let server: http.Server;
 let baseURL: string;
 let received: Received[] = [];
-let respond: (req: Received) => { status: number; body?: any; headers?: Record<string, string> } = () => ({
+let respond: (req: Received) => {
+  status: number;
+  body?: any;
+  headers?: Record<string, string>;
+} = () => ({
   status: 201,
   body: okBody(),
 });
@@ -132,7 +156,10 @@ beforeAll(async () => {
       };
       received.push(r);
       const out = respond(r);
-      res.writeHead(out.status, { 'content-type': 'application/json', ...(out.headers ?? {}) });
+      res.writeHead(out.status, {
+        'content-type': 'application/json',
+        ...(out.headers ?? {}),
+      });
       res.end(JSON.stringify(out.body ?? {}));
     });
   });
@@ -150,7 +177,7 @@ const env = (extra: Record<string, string | undefined> = {}) =>
     PUBLIK_API_BASE_URL: baseURL,
     PUBLIK_APP_VERSION: '0.1.2',
     ...extra,
-  }) as NodeJS.ProcessEnv;
+  }) as unknown as NodeJS.ProcessEnv;
 
 beforeEach(() => {
   (configManager as any).reset();
@@ -172,7 +199,9 @@ const state = () => configManager.getConfig('publik', undefined);
 describe('ensureProvisioned — guards', () => {
   it('is a no-op without PUBLIK_APP_TOKEN (dev, Docker, source builds)', async () => {
     const before = JSON.stringify(configManager.getCurrentConfig());
-    expect(await ensureProvisioned({ env: env({ PUBLIK_APP_TOKEN: undefined }) })).toBe('no-token');
+    expect(
+      await ensureProvisioned({ env: env({ PUBLIK_APP_TOKEN: undefined }) }),
+    ).toBe('no-token');
     expect(JSON.stringify(configManager.getCurrentConfig())).toBe(before);
     expect(received).toHaveLength(0);
   });
@@ -183,7 +212,9 @@ describe('ensureProvisioned — guards', () => {
     expect(publikEntry()).toBeUndefined();
     /* nothing minted, nothing written: the install id is born at consent */
     expect(state()?.state).not.toBe('active');
-    expect(JSON.stringify(configManager.getCurrentConfig())).not.toContain('pk_live_');
+    expect(JSON.stringify(configManager.getCurrentConfig())).not.toContain(
+      'pk_live_',
+    );
   });
 
   it('declined stays declined, even with a token and consent', async () => {
@@ -241,7 +272,11 @@ describe('acceptDisclosure — the mint', () => {
       status: 201,
       body: okBody({
         base_url: 'https://api.publikhq.com/v1/',
-        models: { fast: 'publik-fast-2', balanced: 'publik-balanced-2', smart: 'publik-smart' },
+        models: {
+          fast: 'publik-fast-2',
+          balanced: 'publik-balanced-2',
+          smart: 'publik-smart',
+        },
       }),
     });
     await acceptDisclosure({ env: env() });
@@ -254,7 +289,10 @@ describe('acceptDisclosure — the mint', () => {
   });
 
   it('falls back to the compiled base URL when the response omits it', async () => {
-    respond = () => ({ status: 201, body: okBody({ base_url: undefined, models: undefined }) });
+    respond = () => ({
+      status: 201,
+      body: okBody({ base_url: undefined, models: undefined }),
+    });
     await acceptDisclosure({ env: env() });
     expect(publikEntry().config.baseURL).toBe(baseURL);
     expect(publikModels()).toEqual({
@@ -275,8 +313,14 @@ describe('acceptDisclosure — the mint', () => {
       type: 'openai',
       chatModels: [{ name: 'GPT 5.1', key: 'gpt-5.1' }],
       embeddingModels: [],
-      config: { apiKey: 'sk-user-entered-secret', baseURL: 'https://api.openai.com/v1' },
-      hash: hashObj({ apiKey: 'sk-user-entered-secret', baseURL: 'https://api.openai.com/v1' }),
+      config: {
+        apiKey: 'sk-user-entered-secret',
+        baseURL: 'https://api.openai.com/v1',
+      },
+      hash: hashObj({
+        apiKey: 'sk-user-entered-secret',
+        baseURL: 'https://api.openai.com/v1',
+      }),
     };
     configManager.updateConfig('modelProviders', [byo]);
     const before = JSON.stringify(byo);
@@ -292,7 +336,14 @@ describe('acceptDisclosure — the mint', () => {
     let n = 0;
     respond = () =>
       n++ === 0
-        ? { status: 200, body: okBody({ key: null, starter_micros: 0, claim_state: 'anonymous' }) }
+        ? {
+            status: 200,
+            body: okBody({
+              key: null,
+              starter_micros: 0,
+              claim_state: 'anonymous',
+            }),
+          }
         : { status: 201, body: okBody({ key: KEY2, starter_micros: 0 }) };
 
     expect(await acceptDisclosure({ env: env() })).toBe('active');
@@ -310,7 +361,10 @@ describe('acceptDisclosure — the mint', () => {
   });
 
   it('401 app token → failed, no provider, never a throw', async () => {
-    respond = () => ({ status: 401, body: { error: { type: 'invalid_app_token', message: 'nope' } } });
+    respond = () => ({
+      status: 401,
+      body: { error: { type: 'invalid_app_token', message: 'nope' } },
+    });
     expect(await acceptDisclosure({ env: env() })).toBe('failed');
     expect(publikEntry()).toBeUndefined();
     expect(state().state).toBe('pending');
@@ -329,15 +383,22 @@ describe('acceptDisclosure — the mint', () => {
   });
 
   it('malformed key → failed, nothing stored', async () => {
-    respond = () => ({ status: 201, body: okBody({ key: 'sk-not-a-publik-key' }) });
+    respond = () => ({
+      status: 201,
+      body: okBody({ key: 'sk-not-a-publik-key' }),
+    });
     expect(await acceptDisclosure({ env: env() })).toBe('failed');
     expect(publikEntry()).toBeUndefined();
-    expect(JSON.stringify(configManager.getCurrentConfig())).not.toContain('sk-not-a-publik-key');
+    expect(JSON.stringify(configManager.getCurrentConfig())).not.toContain(
+      'sk-not-a-publik-key',
+    );
   });
 
   it('offline → failed, state pending, lastError set, no throw; retry reuses the install id', async () => {
     const deadEnv = env({ PUBLIK_API_BASE_URL: 'http://127.0.0.1:1/api/v1' });
-    expect(await acceptDisclosure({ env: deadEnv, timeoutMs: 500 })).toBe('failed');
+    expect(await acceptDisclosure({ env: deadEnv, timeoutMs: 500 })).toBe(
+      'failed',
+    );
     expect(state().state).toBe('pending');
     expect(state().lastError).toBeTruthy();
     expect(publikEntry()).toBeUndefined();
@@ -350,7 +411,11 @@ describe('acceptDisclosure — the mint', () => {
 
   it('the key format the app accepts is exactly the contract format', () => {
     expect(PUBLIK_KEY_RE.test(KEY)).toBe(true);
-    expect(PUBLIK_KEY_RE.test('pk_test_a8k2m9x4q7v1_h3n6r9t2w5y8z1b4c7d0f3g6j9k2m5p8')).toBe(true);
+    expect(
+      PUBLIK_KEY_RE.test(
+        'pk_test_a8k2m9x4q7v1_h3n6r9t2w5y8z1b4c7d0f3g6j9k2m5p8',
+      ),
+    ).toBe(true);
     expect(PUBLIK_KEY_RE.test('pk_live_short_h3n6')).toBe(false);
     expect(PUBLIK_KEY_RE.test('sk-proj-abcdef')).toBe(false);
   });
@@ -384,7 +449,10 @@ describe('handleKeyRevoked [B2]', () => {
   it('reprovision:true re-mints silently with the SAME install_id', async () => {
     await acceptDisclosure({ env: env() });
     const id = state().installId;
-    respond = () => ({ status: 201, body: okBody({ key: KEY2, starter_micros: 0 }) });
+    respond = () => ({
+      status: 201,
+      body: okBody({ key: KEY2, starter_micros: 0 }),
+    });
 
     expect(await handleKeyRevoked(true, { env: env() })).toBe('active');
     expect(received).toHaveLength(2);

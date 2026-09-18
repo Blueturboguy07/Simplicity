@@ -111,7 +111,10 @@ export class PublikBalanceCache {
     apiKey: string,
     fetchImpl: typeof fetch = fetch,
   ): Promise<BalanceSnapshot> {
-    if (this.snap.balanceMicros !== null && Date.now() - this.snap.seenAt < FRESH_MS) {
+    if (
+      this.snap.balanceMicros !== null &&
+      Date.now() - this.snap.seenAt < FRESH_MS
+    ) {
       return this.peek();
     }
     try {

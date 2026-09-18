@@ -9,8 +9,12 @@ import LemonadeProvider from './lemonade';
 import AnthropicProvider from './anthropic';
 import ClaudeCodeProvider from './claudecode';
 import XAIProvider from './xai';
+import PublikProvider from './publik';
 
 export const providers: Record<string, ProviderConstructor<any>> = {
+  /* First so it sorts first wherever Object.entries(providers) is iterated —
+     it is the packaged build's preselected provider. */
+  publik: PublikProvider,
   openai: OpenAIProvider,
   ollama: OllamaProvider,
   gemini: GeminiProvider,
