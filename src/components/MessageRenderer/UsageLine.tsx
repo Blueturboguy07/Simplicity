@@ -5,6 +5,8 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { UsageBlock } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import ProviderLogo from '../ui/ProviderLogo';
+import { usePublikStatus } from '@/lib/hooks/usePublikStatus';
+import { formatMicros } from '@/lib/publik/types';
 
 /* Never renders raw floats like $0.00417382 — 2 sig figs above a cent,
    nearest tenth-of-a-cent below it. */
@@ -36,6 +38,13 @@ const FreeChip = ({ className }: { className?: string }) => (
 const UsageLine = ({ block }: { block: UsageBlock }) => {
   const [open, setOpen] = useState(false);
   const { totalCost, breakdown, free } = block.data;
+  /* "publik balance $x" after a turn that went through publik API: the
+     server-side cache is fed by the response headers; this only reads it.
+     Fetched once per rendered usage line, never for a BYO-only turn. */
+  const viaPublik = breakdown.some((e) => e.providerType === 'publik');
+  const { status: publik } = usePublikStatus([viaPublik ? block.id : null]);
+  const publikBalance =
+    viaPublik && publik?.balanceMicros != null ? publik.balanceMicros : null;
 
   if (breakdown.length === 0) return null;
 
@@ -62,6 +71,14 @@ const UsageLine = ({ block }: { block: UsageBlock }) => {
           <>
             <span>·</span>
             <span>{breakdown.length} models</span>
+          </>
+        )}
+        {publikBalance !== null && (
+          <>
+            <span>·</span>
+            <span className="tabular-nums">
+              publik balance {formatMicros(publikBalance)}
+            </span>
           </>
         )}
         {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}

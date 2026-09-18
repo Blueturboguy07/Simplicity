@@ -15,6 +15,7 @@ import {
 } from '@/lib/config/types';
 import Select from '@/components/ui/Select';
 import { toast } from 'sonner';
+import { usePublikStatus } from '@/lib/hooks/usePublikStatus';
 
 const AddProvider = ({
   modelProviders,
@@ -24,8 +25,15 @@ const AddProvider = ({
   setProviders: React.Dispatch<React.SetStateAction<ConfigModelProvider[]>>;
 }) => {
   const [open, setOpen] = useState(false);
+  /* publik is provisioned, not pasted, so it is not in the dropdown —
+     except as "publik API (reconnect)" after "use my own key" or a
+     disconnect, which re-runs the disclosure rather than asking for a key. */
+  const { status: publik, act: publikAct } = usePublikStatus([open]);
+  const publikReconnectable =
+    publik?.available === true &&
+    (publik.state === 'declined' || publik.state === 'disconnected');
   const [selectedProvider, setSelectedProvider] = useState<null | string>(
-    modelProviders[0]?.key || null,
+    modelProviders.find((p) => p.key !== 'publik')?.key || null,
   );
   const [config, setConfig] = useState<Record<string, any>>({});
   const [name, setName] = useState('');
@@ -35,6 +43,12 @@ const AddProvider = ({
     const map: Record<string, { name: string; fields: UIConfigField[] }> = {};
 
     modelProviders.forEach((p) => {
+      if (p.key === 'publik') {
+        if (publikReconnectable) {
+          map[p.key] = { name: 'publik API (reconnect)', fields: [] };
+        }
+        return;
+      }
       map[p.key] = {
         name: p.name,
         fields: p.fields,
@@ -42,7 +56,7 @@ const AddProvider = ({
     });
 
     return map;
-  }, [modelProviders]);
+  }, [modelProviders, publikReconnectable]);
 
   const selectedProviderFields = useMemo(() => {
     if (!selectedProvider) return [];
@@ -62,6 +76,14 @@ const AddProvider = ({
     e.preventDefault();
     setLoading(true);
     try {
+      if (selectedProvider === 'publik') {
+        /* Back to pending with a fresh install id; the disclosure shows in
+           Settings → Models on the next render and "Continue" mints. */
+        const next = await publikAct('reconnect');
+        if (!next) throw new Error('reconnect');
+        window.location.reload();
+        return;
+      }
       const res = await fetch('/api/providers', {
         method: 'POST',
         headers: {
@@ -144,6 +166,14 @@ const AddProvider = ({
                         />
                       </div>
 
+                      {selectedProvider === 'publik' && (
+                        <p className="text-xs text-black/60 dark:text-white/60">
+                          Reconnecting shows the publik API disclosure again and
+                          issues this computer a new key. Nothing is sent until
+                          you continue there.
+                        </p>
+                      )}
+
                       <div
                         key="name"
                         className="flex flex-col items-start space-y-2"
@@ -157,7 +187,8 @@ const AddProvider = ({
                           className="w-full rounded-lg border border-light-200 dark:border-dark-200 bg-light-primary dark:bg-dark-primary px-4 py-3 pr-10 text-sm text-black/80 dark:text-white/80 placeholder:text-black/40 dark:placeholder:text-white/40 focus-visible:outline-none focus-visible:border-light-300 dark:focus-visible:border-dark-300 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
                           placeholder={'e.g., My OpenAI Connection'}
                           type="text"
-                          required={true}
+                          required={selectedProvider !== 'publik'}
+                          disabled={selectedProvider === 'publik'}
                         />
                       </div>
 

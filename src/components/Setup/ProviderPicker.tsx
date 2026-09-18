@@ -28,8 +28,7 @@ import { cn } from '@/lib/utils';
 const providerInfo: Record<string, { free: boolean; blurb: string }> = {
   ollama: {
     free: true,
-    blurb:
-      'Free — runs on your computer. No account, no key, nothing to pay.',
+    blurb: 'Free — runs on your computer. No account, no key, nothing to pay.',
   },
   anthropic: {
     free: false,
@@ -48,6 +47,11 @@ const providerInfo: Record<string, { free: boolean; blurb: string }> = {
     blurb: 'Key from console.groq.com. Has a free tier.',
   },
   openai: { free: false, blurb: 'Paid key from platform.openai.com.' },
+  publik: {
+    free: false,
+    blurb:
+      "Priced per use at 50% of the model's published list price, from your publik balance.",
+  },
 };
 
 /* Where to actually go get a key, for the providers that need one. Opened in
@@ -216,7 +220,9 @@ const ProviderRow = ({
       /* Verify before registering. The provider's model list is static, so it
          would happily "connect" against a signed-out CLI and only fail on the
          first real search — this runs one trivial prompt to prove it works. */
-      const check = await fetch('/api/local-runtime/claude', { method: 'POST' });
+      const check = await fetch('/api/local-runtime/claude', {
+        method: 'POST',
+      });
       const checkBody = await check.json().catch(() => ({}));
       if (!check.ok) throw new Error(checkBody?.message);
 
@@ -246,131 +252,135 @@ const ProviderRow = ({
       )}
     >
       <div className="flex flex-row items-center gap-3 md:gap-4">
-      <ProviderLogo
-        providerKey={provider.key}
-        size={24}
-        className="text-black/80 dark:text-white/80 shrink-0"
-      />
+        <ProviderLogo
+          providerKey={provider.key}
+          size={24}
+          className="text-black/80 dark:text-white/80 shrink-0"
+        />
 
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-row items-center gap-2">
-          <p className="text-xs sm:text-sm font-medium text-black dark:text-white truncate">
-            {provider.name}
-          </p>
-          {info && (
-            <span
-              className={cn(
-                'shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
-                info.free
-                  ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                  : 'bg-black/5 dark:bg-white/10 text-black/50 dark:text-white/50',
-              )}
-            >
-              {info.free ? 'Free' : 'API key'}
-            </span>
-          )}
-        </div>
-        <p className="text-[10px] sm:text-xs text-black/50 dark:text-white/50 mt-0.5 truncate">
-          {info?.blurb ?? ''}
-        </p>
-      </div>
-
-      {connected ? (
-        <span className="flex shrink-0 flex-row items-center gap-1.5 text-xs font-medium text-[#24A0ED]">
-          <Check className="h-4 w-4" strokeWidth={2.5} />
-          Connected
-        </span>
-      ) : progress ? (
-        /* Live install progress — the model download is the long pole, so the
-           percentage is worth showing rather than a spinner. */
-        <div className="flex shrink-0 flex-col items-end gap-1 w-40 sm:w-56">
-          <p className="text-[10px] text-black/60 dark:text-white/60 truncate w-full text-right">
-            {progress}
-          </p>
-          <div className="h-1 w-full rounded-full bg-light-200 dark:bg-dark-200 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-[#24A0ED] transition-all duration-300"
-              style={{ width: `${percent ?? 8}%` }}
-            />
-          </div>
-        </div>
-      ) : provider.key === 'ollama' ? (
-        <div className="flex shrink-0 flex-row items-center gap-2">
-          <select
-            value={tier}
-            onChange={(e) => setTier(e.target.value)}
-            className="rounded-lg border border-light-200 dark:border-dark-200 bg-light-primary dark:bg-dark-primary px-2 py-1.5 text-xs text-black/80 dark:text-white/80 focus-visible:outline-none"
-          >
-            <option value="fast">Fast · ~2 GB</option>
-            <option value="balanced">Balanced · ~4.7 GB</option>
-            <option value="quality">Best · ~9 GB</option>
-          </select>
-          <button
-            type="button"
-            onClick={install}
-            disabled={loading}
-            className="rounded-lg bg-[#24A0ED] px-3 py-1.5 text-xs font-medium text-white transition duration-200 hover:bg-[#1e8fd1] active:scale-95 disabled:opacity-60"
-          >
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Install'}
-          </button>
-        </div>
-      ) : (
-        <div className="flex shrink-0 flex-col items-end gap-1">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-row items-center gap-2">
-            {field && (
-              <input
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && connect()}
-                type="password"
-                placeholder="Paste API key"
-                className="w-28 sm:w-40 rounded-lg border border-light-200 dark:border-dark-200 bg-light-primary dark:bg-dark-primary px-3 py-1.5 text-xs text-black/80 dark:text-white/80 placeholder:text-black/40 dark:placeholder:text-white/40 focus-visible:outline-none focus-visible:border-light-300 dark:focus-visible:border-dark-300 transition-colors"
-              />
+            <p className="text-xs sm:text-sm font-medium text-black dark:text-white truncate">
+              {provider.name}
+            </p>
+            {info && (
+              <span
+                className={cn(
+                  'shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
+                  info.free
+                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                    : 'bg-black/5 dark:bg-white/10 text-black/50 dark:text-white/50',
+                )}
+              >
+                {info.free ? 'Free' : 'API key'}
+              </span>
             )}
+          </div>
+          <p className="text-[10px] sm:text-xs text-black/50 dark:text-white/50 mt-0.5 truncate">
+            {info?.blurb ?? ''}
+          </p>
+        </div>
+
+        {connected ? (
+          <span className="flex shrink-0 flex-row items-center gap-1.5 text-xs font-medium text-[#24A0ED]">
+            <Check className="h-4 w-4" strokeWidth={2.5} />
+            Connected
+          </span>
+        ) : progress ? (
+          /* Live install progress — the model download is the long pole, so the
+           percentage is worth showing rather than a spinner. */
+          <div className="flex shrink-0 flex-col items-end gap-1 w-40 sm:w-56">
+            <p className="text-[10px] text-black/60 dark:text-white/60 truncate w-full text-right">
+              {progress}
+            </p>
+            <div className="h-1 w-full rounded-full bg-light-200 dark:bg-dark-200 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-[#24A0ED] transition-all duration-300"
+                style={{ width: `${percent ?? 8}%` }}
+              />
+            </div>
+          </div>
+        ) : provider.key === 'ollama' ? (
+          <div className="flex shrink-0 flex-row items-center gap-2">
+            <select
+              value={tier}
+              onChange={(e) => setTier(e.target.value)}
+              className="rounded-lg border border-light-200 dark:border-dark-200 bg-light-primary dark:bg-dark-primary px-2 py-1.5 text-xs text-black/80 dark:text-white/80 focus-visible:outline-none"
+            >
+              <option value="fast">Fast · ~2 GB</option>
+              <option value="balanced">Balanced · ~4.7 GB</option>
+              <option value="quality">Best · ~9 GB</option>
+            </select>
             <button
               type="button"
-              onClick={connect}
-              disabled={loading || (field?.required && !key.trim())}
-              className="rounded-lg bg-[#24A0ED] px-3 py-1.5 text-xs font-medium text-white transition duration-200 hover:bg-[#1e8fd1] active:scale-95 disabled:bg-light-200 dark:disabled:bg-dark-200 disabled:text-black/40 dark:disabled:text-white/40 disabled:active:scale-100"
+              onClick={install}
+              disabled={loading}
+              className="rounded-lg bg-[#24A0ED] px-3 py-1.5 text-xs font-medium text-white transition duration-200 hover:bg-[#1e8fd1] active:scale-95 disabled:opacity-60"
             >
               {loading ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                'Connect'
+                'Install'
               )}
             </button>
+          </div>
+        ) : (
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <div className="flex flex-row items-center gap-2">
+              {field && (
+                <input
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && connect()}
+                  type="password"
+                  placeholder="Paste API key"
+                  className="w-28 sm:w-40 rounded-lg border border-light-200 dark:border-dark-200 bg-light-primary dark:bg-dark-primary px-3 py-1.5 text-xs text-black/80 dark:text-white/80 placeholder:text-black/40 dark:placeholder:text-white/40 focus-visible:outline-none focus-visible:border-light-300 dark:focus-visible:border-dark-300 transition-colors"
+                />
+              )}
+              <button
+                type="button"
+                onClick={connect}
+                disabled={loading || (field?.required && !key.trim())}
+                className="rounded-lg bg-[#24A0ED] px-3 py-1.5 text-xs font-medium text-white transition duration-200 hover:bg-[#1e8fd1] active:scale-95 disabled:bg-light-200 dark:disabled:bg-dark-200 disabled:text-black/40 dark:disabled:text-white/40 disabled:active:scale-100"
+              >
+                {loading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  'Connect'
+                )}
+              </button>
 
-            {/* Anthropic is the one provider with two ways in — a key, or the
+              {/* Anthropic is the one provider with two ways in — a key, or the
                 Claude plan the user already pays for. Both live on this row. */}
-            {provider.key === 'anthropic' && (
-              <>
-                <span className="text-[10px] text-black/30 dark:text-white/30">
-                  or
-                </span>
-                <button
-                  type="button"
-                  onClick={connectAccount}
-                  disabled={loading}
-                  className="rounded-lg border border-light-200 dark:border-dark-200 px-3 py-1.5 text-xs font-medium text-black/80 dark:text-white/80 transition duration-200 hover:bg-light-secondary dark:hover:bg-dark-secondary active:scale-95 disabled:opacity-60"
-                >
-                  Connect account
-                </button>
-              </>
+              {provider.key === 'anthropic' && (
+                <>
+                  <span className="text-[10px] text-black/30 dark:text-white/30">
+                    or
+                  </span>
+                  <button
+                    type="button"
+                    onClick={connectAccount}
+                    disabled={loading}
+                    className="rounded-lg border border-light-200 dark:border-dark-200 px-3 py-1.5 text-xs font-medium text-black/80 dark:text-white/80 transition duration-200 hover:bg-light-secondary dark:hover:bg-dark-secondary active:scale-95 disabled:opacity-60"
+                  >
+                    Connect account
+                  </button>
+                </>
+              )}
+            </div>
+            {keyLinks[provider.key] && (
+              <a
+                href={keyLinks[provider.key]}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex flex-row items-center gap-0.5 text-[9px] sm:text-[10px] text-black/40 dark:text-white/40 hover:text-[#24A0ED] hover:dark:text-[#24A0ED] transition-colors"
+              >
+                Get a key
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
             )}
           </div>
-          {keyLinks[provider.key] && (
-            <a
-              href={keyLinks[provider.key]}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex flex-row items-center gap-0.5 text-[9px] sm:text-[10px] text-black/40 dark:text-white/40 hover:text-[#24A0ED] hover:dark:text-[#24A0ED] transition-colors"
-            >
-              Get a key
-              <ExternalLink className="h-2.5 w-2.5" />
-            </a>
-          )}
-        </div>
-      )}
+        )}
       </div>
 
       {/* Stays up until the next attempt (see install()'s setInstallError(null))
@@ -434,12 +444,12 @@ const ApiKeyExplainer = () => {
         </button>
       </div>
       <p className="text-[11px] sm:text-xs leading-relaxed text-black/60 dark:text-white/60">
-        Think of it like a password — it lets Simplicity use an AI service
-        (like OpenAI or Google) under your own account, so usage is billed to
-        you, not us. Keys stay on your device and go straight to that
-        provider, never anywhere else. Would rather skip that? Ollama (installs
-        on your computer) and Claude through your existing subscription both
-        work with no key at all.
+        Think of it like a password — it lets Simplicity use an AI service (like
+        OpenAI or Google) under your own account, so usage is billed to you, not
+        us. Keys stay on your device and go straight to that provider, never
+        anywhere else. Would rather skip that? Ollama (installs on your
+        computer) and Claude through your existing subscription both work with
+        no key at all.
       </p>
       <p className="text-[11px] sm:text-xs leading-relaxed text-black/60 dark:text-white/60">
         <span className="font-medium text-black/80 dark:text-white/80">
@@ -455,8 +465,8 @@ const ApiKeyExplainer = () => {
         </span>{' '}
         use the &quot;Get a key&quot; link on a provider below → sign in (or
         create a free developer account) → add a small credit balance if the
-        platform asks (usually $5 minimum; each answer costs fractions of a
-        cent and Simplicity shows the exact price under every answer) → click
+        platform asks (usually $5 minimum; each answer costs fractions of a cent
+        and Simplicity shows the exact price under every answer) → click
         &quot;Create key&quot; → copy it → paste it here.
       </p>
     </div>
@@ -490,6 +500,9 @@ const ProviderPicker = ({
     (p) =>
       p.key !== 'transformers' &&
       p.key !== 'claudecode' &&
+      /* publik is provisioned, not pasted — it is the PublikCard above this
+         list, never a paste-a-key row. */
+      p.key !== 'publik' &&
       /* Niche self-hosted server with no model catalog entries — a dead-end
          row for the audience this screen is written for. */
       p.key !== 'lemonade',
