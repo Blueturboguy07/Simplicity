@@ -22,6 +22,20 @@ export const GET = async (req: NextRequest) => {
 
         return {
           ...mp,
+          /* The publik key is provisioned, read-only in Settings, and never
+             edited from the renderer — only its public 12-char id crosses
+             the local HTTP boundary. BYO keys are the user's own and stay
+             editable exactly as before. */
+          config:
+            mp.type === 'publik' && typeof mp.config?.apiKey === 'string'
+              ? {
+                  ...mp.config,
+                  apiKey: mp.config.apiKey.replace(
+                    /^(pk_(?:live|test)_[a-z0-9]{12})_[a-z0-9]+$/,
+                    '$1_••••••••',
+                  ),
+                }
+              : mp.config,
           chatModels: activeProvider?.chatModels ?? mp.chatModels,
           embeddingModels:
             activeProvider?.embeddingModels ?? mp.embeddingModels,
