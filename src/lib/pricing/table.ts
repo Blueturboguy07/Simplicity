@@ -36,7 +36,11 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
     outputPerMTok: 2.0,
     cachedInputPerMTok: 0.025,
   },
-  'gpt-4o': { inputPerMTok: 2.5, outputPerMTok: 10.0, cachedInputPerMTok: 1.25 },
+  'gpt-4o': {
+    inputPerMTok: 2.5,
+    outputPerMTok: 10.0,
+    cachedInputPerMTok: 1.25,
+  },
   'gpt-4o-mini': {
     inputPerMTok: 0.15,
     outputPerMTok: 0.6,
@@ -110,6 +114,60 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   },
 };
 
+/* publik API — served models behind the three tier aliases, at the
+   provider's published list price (CONTRACT §2, R24 §5; Sol is a
+   promotional list through 2026-11-21), and the alias rows the meter
+   actually resolves to, charged at PUBLIK_PRICE_FACTOR × list. The gateway
+   settles from its own ledger; this keeps the in-app estimate within
+   rounding of the real charge. */
+export const PUBLIK_PRICE_FACTOR = 0.5;
+
+const PUBLIK_SERVED: Record<string, ModelPricing> = {
+  'gpt-5.6-luna': {
+    inputPerMTok: 0.2,
+    outputPerMTok: 1.2,
+    cachedInputPerMTok: 0.02,
+    notes: 'Served behind publik-fast.',
+  },
+  'gpt-5.6-terra': {
+    inputPerMTok: 2.0,
+    outputPerMTok: 12.0,
+    cachedInputPerMTok: 0.2,
+    notes: 'Served behind publik-balanced.',
+  },
+  'gpt-5.6-sol': {
+    inputPerMTok: 4.0,
+    outputPerMTok: 20.0,
+    cachedInputPerMTok: 0.4,
+    notes: 'Served behind publik-smart. Promotional list through 2026-11-21.',
+  },
+};
+
+export const PUBLIK_ALIAS_SERVED: Record<string, string> = {
+  'publik-fast': 'gpt-5.6-luna',
+  'publik-balanced': 'gpt-5.6-terra',
+  'publik-smart': 'gpt-5.6-sol',
+};
+
+const publikRow = (alias: string): ModelPricing => {
+  const p = PUBLIK_SERVED[PUBLIK_ALIAS_SERVED[alias]];
+  return {
+    inputPerMTok: p.inputPerMTok * PUBLIK_PRICE_FACTOR,
+    outputPerMTok: p.outputPerMTok * PUBLIK_PRICE_FACTOR,
+    cachedInputPerMTok:
+      p.cachedInputPerMTok === undefined
+        ? undefined
+        : p.cachedInputPerMTok * PUBLIK_PRICE_FACTOR,
+    notes: `publik alias; charged at ${PUBLIK_PRICE_FACTOR * 100}% of list.`,
+  };
+};
+
+Object.assign(MODEL_PRICING, PUBLIK_SERVED, {
+  'publik/publik-fast': publikRow('publik-fast'),
+  'publik/publik-balanced': publikRow('publik-balanced'),
+  'publik/publik-smart': publikRow('publik-smart'),
+});
+
 /** Provider TYPES whose calls are never metered to the user. */
 export const FREE_PROVIDER_TYPES = new Set([
   'ollama',
@@ -140,6 +198,10 @@ export function resolvePricingKey(
     case 'xai':
       if (modelKey === 'grok-4.1') return 'grok-4.1-fast';
       return modelKey; // grok-4, grok-4.3
+    case 'publik':
+      /* alias → the halved row; an unknown alias (a renamed tier from the
+         install response) still prices if it maps to a served model */
+      return `publik/${modelKey}`;
     default:
       return modelKey; // unknown → try exact, may miss → null cost
   }
@@ -148,7 +210,11 @@ export function resolvePricingKey(
 /** Returns USD cost, or null when the model key is unpriced (caller shows Free/—). */
 export function estimateCostUSD(
   pricingKey: string | null,
-  usage: { inputTokens: number; outputTokens: number; cachedInputTokens?: number },
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens?: number;
+  },
 ): number | null {
   if (!pricingKey) return null;
   const p = MODEL_PRICING[pricingKey];

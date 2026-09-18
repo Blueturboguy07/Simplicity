@@ -4,6 +4,8 @@ import {
   resolvePricingKey,
   FREE_PROVIDER_TYPES,
   MODEL_PRICING,
+  PUBLIK_ALIAS_SERVED,
+  PUBLIK_PRICE_FACTOR,
 } from './table';
 
 /* Pins the pricing math the cost meter depends on: resolvePricingKey's
@@ -146,5 +148,44 @@ describe('estimateCostUSD', () => {
     // uncachedInput clamps to 0, so only the (inflated) cached portion bills
     // at the cached rate.
     expect(cost).toBeCloseTo((1000 / 1e6) * 0.125, 10);
+  });
+});
+
+describe('publik API pricing', () => {
+  it('maps a publik alias onto its own priced row, and publik is never Free', () => {
+    expect(resolvePricingKey('publik', 'publik-balanced')).toBe(
+      'publik/publik-balanced',
+    );
+    expect(FREE_PROVIDER_TYPES.has('publik')).toBe(false);
+    for (const alias of Object.keys(PUBLIK_ALIAS_SERVED)) {
+      expect(MODEL_PRICING[`publik/${alias}`]).toBeDefined();
+      expect(MODEL_PRICING[PUBLIK_ALIAS_SERVED[alias]]).toBeDefined();
+    }
+  });
+
+  it('charges exactly PUBLIK_PRICE_FACTOR × the served model list price for the same tokens', () => {
+    expect(PUBLIK_PRICE_FACTOR).toBe(0.5);
+    const usage = {
+      inputTokens: 2_000_000,
+      cachedInputTokens: 500_000,
+      outputTokens: 300_000,
+    };
+    for (const [alias, served] of Object.entries(PUBLIK_ALIAS_SERVED)) {
+      const list = estimateCostUSD(served, usage)!;
+      const charged = estimateCostUSD(
+        resolvePricingKey('publik', alias),
+        usage,
+      )!;
+      expect(list).toBeGreaterThan(0);
+      expect(charged).toBeCloseTo(list * PUBLIK_PRICE_FACTOR, 10);
+    }
+  });
+
+  it('known value: publik-balanced, 1M in + 1M out = half of $14.00', () => {
+    const cost = estimateCostUSD('publik/publik-balanced', {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    });
+    expect(cost).toBeCloseTo(7.0, 10);
   });
 });
