@@ -250,10 +250,13 @@ export async function ensureProvisioned(
     publikBalance.reset();
     if (body.wallet) publikBalance.applyWallet(body.wallet);
     else if (typeof starter === 'number') {
+      /* The first-run card's balance line (CONTRACT §12.1 (a)) reads the
+         mint response until the first metered call stamps headers. */
       publikBalance.applyWallet({
         balance_micros: starter,
         claim_state: body.claim_state ?? 'anonymous',
         claim_url: body.claim_url,
+        starter: { remaining_micros: starter },
       });
     }
     return 'active';
@@ -275,6 +278,15 @@ export async function ensureProvisioned(
 export async function acceptDisclosure(deps: ProvisionDeps = {}) {
   writeState({ disclosureVersion: DISCLOSURE_VERSION });
   return ensureProvisioned(deps);
+}
+
+/* The first-run card's "Later" (and its plan button): records that the
+   balance line, the justification and the CTA were shown (CONTRACT §12.4,
+   "never a silent starter"). Touches nothing else — the key stays, the
+   starter stays, and the button stays in Settings. */
+export function acknowledgeCta(deps: ProvisionDeps = {}) {
+  if (!readState()) return;
+  writeState({ ctaSeenAt: (deps.now ?? (() => new Date()))().toISOString() });
 }
 
 /* "Use my own key instead" — from the wizard, from Settings' delete, or

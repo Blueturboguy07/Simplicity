@@ -56,6 +56,9 @@ export type PublikState = {
   models?: Partial<Record<PublikTier, string>>;
   starterMicros?: number;
   mintedAt?: string;
+  /* When the first-run card's CTA was acknowledged ("Later" or the plan
+     button). Never gates anything; the card and Settings keep the button. */
+  ctaSeenAt?: string;
   lastError?: string;
   retryAfter?: string;
 };
@@ -109,6 +112,11 @@ export type PublikStatus = {
   claimState: 'anonymous' | 'claimed' | null;
   balanceMicros: number | null;
   starterRemainingMicros: number | null;
+  /* What the mint granted — the 20% banner threshold is measured against it. */
+  starterGrantMicros: number | null;
+  /* The last 402 this server saw, until a metered call succeeds again. */
+  creditError: { message: string; topUpUrl: string | null } | null;
+  ctaSeen: boolean;
   week: {
     usedMicros: number | null;
     budgetMicros: number | null;
