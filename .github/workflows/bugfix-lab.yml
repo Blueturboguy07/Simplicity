@@ -1,0 +1,45 @@
+# bugfix-lab controlled-environment oracle for
+# simplicity-ollama-install-button-noop-mac-win.
+#
+# Triggered on `push` (not `workflow_dispatch`): a brand-new workflow_dispatch
+# workflow only becomes dispatchable via the API/CLI once it exists on the
+# repo's DEFAULT branch, which this lab branch is not and should not become.
+# `push` has no such registration requirement -- GitHub runs whatever
+# .github/workflows/*.yml a push's own ref contains, so this fires the moment
+# this branch is pushed, entirely self-contained to this branch, and edits no
+# file any other branch or cluster depends on.
+#
+# Runs on a FRESH macos-latest runner on purpose: a real, already-installed
+# Ollama (as on a developer's own Mac) makes findBinary() succeed via its
+# hardcoded absolute-path fallbacks regardless of PATH, which sends a real
+# install request at a real local daemon -- not what this cluster is about,
+# and not safe to force-fail against on shared infrastructure. A GitHub-hosted
+# runner starts with no Ollama at all, exactly like the reporter's machine.
+name: bugfix-lab
+
+on:
+  push:
+    branches:
+      - fix/simplicity-ollama-install-button-noop-mac-win-desktophead
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: corepack enable
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: npx playwright install chromium
+
+      - name: Run the oracle
+        run: bash scripts/bugfix-lab/simplicity-ollama-install-button-noop-mac-win.sh
