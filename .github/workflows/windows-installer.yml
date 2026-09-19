@@ -1,17 +1,16 @@
-# Builds the Windows NSIS installer ON WINDOWS.
+# BRANCH OVERRIDE — fix/simplicity-free-tier-api-key-confusion-mac-win only.
 #
-# The v0.1.0 exe was cross-built from macOS, which broke it twice over:
-#   • electron-builder without wine extracts the uninstaller with a pure-JS
-#     reader that produces corrupt uninstallers ("no uninstall module found"
-#     reports; electron-userland/electron-builder#4875).
-#   • yarn install on macOS resolves platform-specific optional deps for
-#     darwin only, so the traced standalone server shipped without the win32
-#     builds of @napi-rs/canvas (pdf-parse → /api/chat) and sharp.
-# Building on a Windows runner fixes both, and the smoke-test below exercises
-# the installed uninstaller — the exact thing that shipped broken.
+# The real windows-installer workflow lives on `desktop` and is untouched there.
+# It is borrowed here purely as a dispatch vehicle: GitHub will only start a
+# `workflow_dispatch` run for a workflow FILE THAT EXISTS ON THE DEFAULT BRANCH
+# (`gh workflow run bugfix-lab.yml --ref <branch>` answers
+# "HTTP 404: workflow bugfix-lab.yml not found on the default branch"), and
+# adding a lab workflow to `desktop` is not this pipeline's to do. Dispatching
+# this filename with --ref <this branch> runs the content below, from this
+# branch, on a windows-latest runner, and changes nothing on `desktop`.
 #
-# The exe is uploaded as a workflow artifact; the release is assembled locally
-# so the mac DMG and Windows exe land in one publish with no broken-link gap.
+# Identical in substance to .github/workflows/bugfix-lab.yml in this same
+# commit, which is the canonical copy.
 name: windows-installer
 
 on:
@@ -21,71 +20,26 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  repro:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24'
 
-      - run: yarn install --frozen-lockfile --network-timeout 600000
-
-      - run: yarn test
-
-      # PUBLIK_APP_TOKEN is the public app token the packaged build
-      # provisions its publik API key with (desktop/prepare.mjs). Absent
-      # secret → BYO-only build, which the step below turns into a hard
-      # failure so a token-less exe is never mistaken for a release build.
-      - run: yarn dist:win
-        env:
-          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
-
-      - name: Assert the publik token is in the payload and not in the client bundle
+      - name: Repro — simplicity-free-tier-api-key-confusion-mac-win
         shell: pwsh
-        env:
-          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not $env:PUBLIK_APP_TOKEN) { throw "PUBLIK_APP_TOKEN secret is not set - refusing to build a release exe without it" }
-          $standalone = Join-Path $PWD '.next\standalone'
-          if (!(Test-Path (Join-Path $standalone 'publik-app.json'))) { throw "publik-app.json missing from the standalone payload" }
-          $leak = Get-ChildItem -Recurse -File (Join-Path $standalone '.next\static') | Select-String -SimpleMatch -Pattern $env:PUBLIK_APP_TOKEN -List
-          if ($leak) { throw "publik app token leaked into the client bundle" }
-          Write-Host "publik token baked into the server payload only"
+        run: ./scripts/bugfix-lab/simplicity-free-tier-api-key-confusion-mac-win.ps1
 
-      - name: Smoke-test install + uninstall
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $setup = Join-Path $PWD 'release\Simplicity-Setup-Windows.exe'
-          if (!(Test-Path $setup)) { throw "installer was not produced" }
-
-          Start-Process -FilePath $setup -ArgumentList '/S' -Wait
-          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity'
-          if (!(Test-Path (Join-Path $dir 'Simplicity.exe'))) { throw "Simplicity.exe missing after install" }
-          $resources = Join-Path $dir 'resources\.next\standalone'
-          if (!(Test-Path (Join-Path $resources 'server.js'))) { throw "standalone server missing after install" }
-          $canvasWin = Get-ChildItem -Recurse -Filter '*.node' (Join-Path $resources 'node_modules') |
-            Where-Object { $_.Name -match 'win32' -or $_.FullName -match 'win32' }
-          if (-not $canvasWin) { throw "no win32 native modules in the bundle - cross-build regression" }
-
-          $un = Join-Path $dir 'Uninstall Simplicity.exe'
-          if (!(Test-Path $un)) { throw "uninstaller missing after install" }
-          Start-Process -FilePath $un -ArgumentList '/S' -Wait
-
-          # A /S uninstall hands off to a temp copy and returns early - poll.
-          $gone = $false
-          foreach ($i in 1..12) {
-            Start-Sleep -Seconds 5
-            if (!(Test-Path (Join-Path $dir 'Simplicity.exe'))) { $gone = $true; break }
-          }
-          if (-not $gone) { throw "uninstaller ran but Simplicity.exe is still present" }
-          Write-Host "install + uninstall both clean"
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: Simplicity-Setup-Windows
-          path: release/Simplicity-Setup-Windows.exe
-          if-no-files-found: error
+          name: bugfix-lab-evidence
+          path: |
+            install-stream.ndjson
+            dev.log
+          if-no-files-found: warn
