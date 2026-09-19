@@ -9,8 +9,12 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import DeleteProvider from './DeleteProviderDialog';
 import { usePublikStatus } from '@/lib/hooks/usePublikStatus';
-import { PUBLIK_ACCOUNT_URL, PUBLIK_PRICING_URL } from '@/lib/publik/types';
-import { Disclosure, StatusLine } from '@/components/Setup/PublikCard';
+import { StatusLine } from '@/components/Setup/PublikCard';
+import {
+  BalanceLine,
+  PlanCtaLink,
+  WhyItCosts,
+} from '@/components/Publik/PlanCta';
 
 /* Settings only ever needs to show and edit a connection's credentials — which
    fields those are (an API key, a base URL, both, or none) comes straight from
@@ -115,37 +119,17 @@ const ModelProvider = ({
           </div>
         )}
         {isPublik && publik && (
+          /* CONTRACT §12.2: the same primary button as the first-run card
+             ("Pick a plan" while anonymous → claim_url; "Manage plan" once
+             claimed → the dashboard) and the one-line "Why it costs money"
+             disclosure. */
           <div className="flex flex-col gap-2">
+            <BalanceLine status={publik} />
             <StatusLine status={publik} />
-            <Disclosure compact />
-            <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-              <a
-                href={publik.topUpUrl ?? PUBLIK_ACCOUNT_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[#24A0ED] hover:underline"
-              >
-                {publik.claimState === 'claimed'
-                  ? 'Add credit'
-                  : 'Link this computer to your publik account'}
-              </a>
-              <a
-                href={PUBLIK_PRICING_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[#24A0ED] hover:underline"
-              >
-                How pricing works
-              </a>
-              <a
-                href={PUBLIK_ACCOUNT_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[#24A0ED] hover:underline"
-              >
-                Manage at publikhq.com
-              </a>
+            <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-2 pt-1">
+              <PlanCtaLink status={publik} surface="settings" />
             </div>
+            <WhyItCosts />
           </div>
         )}
         {fields.length === 0 ? (

@@ -19,6 +19,8 @@ import UploadManager from '@/lib/uploads/manager';
 import { UsageMeter, LLMUsage } from '@/lib/pricing/meter';
 import { PublikCreditError, PublikRevokedError } from '@/lib/publik/errors';
 import { handleKeyRevoked, readState } from '@/lib/publik/provision';
+import { publikBalance } from '@/lib/publik/balance';
+import { topUpCta } from '@/lib/publik/cta';
 import { PUBLIK_ACCOUNT_URL } from '@/lib/publik/types';
 
 export const runtime = 'nodejs';
@@ -104,20 +106,24 @@ const describeError = async (
   string | { message: string; action?: { label: string; href: string } }
 > => {
   if (err instanceof PublikCreditError) {
+    /* CONTRACT §12.3: the response's message (it already carries the
+       justification and says what the link does) plus exactly one link,
+       top_up_url — publikhq.com only. The same pair feeds the page banner
+       so the wall is visible outside this chat too. */
     const state = readState();
-    const href = err.topUpUrl ?? state?.claimUrl ?? PUBLIK_ACCOUNT_URL;
-    const claimed = state?.claimState === 'claimed';
-    return {
-      message:
-        err.errorType === 'model_requires_claim'
-          ? `${err.message} Link this computer to your publik account to use this tier, or pick Balanced or Fast.`
-          : claimed
-            ? `publik API needs credit. ${err.message} Add credit to keep searching, or use your own key in Settings.`
-            : `publik API needs credit. Your free balance is used up. Link this computer to your publik account to add credit, or use your own key in Settings.`,
-      action: {
-        label: claimed ? 'Add credit' : 'Link this computer',
-        href,
+    const snap = publikBalance.peek();
+    const link = topUpCta(
+      {
+        claimState: snap.claimState ?? state?.claimState ?? null,
+        topUpUrl: snap.topUpUrl,
+        claimUrl: snap.claimUrl ?? state?.claimUrl ?? null,
       },
+      err.topUpUrl,
+    );
+    publikBalance.noteCreditError(err.message, link.href);
+    return {
+      message: err.message,
+      action: link,
     };
   }
   if (err instanceof PublikRevokedError) {

@@ -3,18 +3,22 @@ import { AlertCircle, Check, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 import type { PublikAction } from '@/lib/hooks/usePublikStatus';
+import { CTA_LATER_LABEL } from '@/lib/publik/cta';
 import {
   formatMicros,
-  PUBLIK_ACCOUNT_URL,
-  PUBLIK_PRICING_URL,
   PUBLIK_TERMS_URL,
   PublikStatus,
 } from '@/lib/publik/types';
+import { BalanceLine, PlanCtaLink, WhyItCosts } from '@/components/Publik/PlanCta';
 
 /* The packaged build's first-run card. Three faces, one component:
  *   pending      — the disclosure (cost + where prompts go) and the two
  *                  buttons; "Continue" is what mints the key [S4]
- *   active       — connected, with the balance line
+ *   active       — right after the mint (CONTRACT §12.1), in this order:
+ *                  (a) the balance line from the response, (b) the
+ *                  one-sentence justification, (c) the primary "Link this
+ *                  computer & pick a plan" opening claim_url, with "Later"
+ *                  keeping the free starter. Never a silent starter (§12.4).
  *   failed /     — unreachable, or this computer was removed from the
  *   disconnected   account; Retry / Reconnect, and always "use my own key"
  *
@@ -64,25 +68,18 @@ const weekLine = (s: PublikStatus) => {
   return `This week ${used} of ${formatMicros(s.week.budgetMicros)}`;
 };
 
+/* The secondary line under the balance: link state and the week's usage.
+   The amount itself is BalanceLine (CONTRACT §12.1 (a)). */
 export const StatusLine = ({ status }: { status: PublikStatus }) => {
   if (!status.connected) return null;
   const parts: string[] = [];
-  if (status.balanceMicros !== null) {
-    parts.push(
-      status.claimState === 'anonymous' &&
-        status.starterRemainingMicros !== null &&
-        status.starterRemainingMicros > 0
-        ? `${formatMicros(status.starterRemainingMicros)} of free balance left`
-        : `${formatMicros(status.balanceMicros)} left`,
-    );
-  }
   const week = weekLine(status);
   if (week) parts.push(week);
   return (
     <p className="text-[10px] sm:text-xs text-black/50 dark:text-white/50 mt-0.5 tabular-nums">
       {status.claimState === 'claimed'
         ? 'Linked to your publik account'
-        : 'Ready'}
+        : 'Ready · this computer is not linked to an account yet'}
       {parts.length > 0 && ` · ${parts.join(' · ')}`}
     </p>
   );
@@ -165,7 +162,10 @@ const PublikCard = ({
             </span>
           </div>
           {active ? (
-            <StatusLine status={status} />
+            <>
+              <BalanceLine status={status} className="mt-0.5" />
+              <StatusLine status={status} />
+            </>
           ) : (
             <p className="text-[10px] sm:text-xs text-black/50 dark:text-white/50 mt-0.5">
               {disconnected
@@ -188,28 +188,25 @@ const PublikCard = ({
 
       {!active && !disconnected && <Disclosure />}
       {active && !status.disclosureCurrent && <Disclosure compact />}
+      {/* (b) the justification: in full the first time, a toggle after
+          "Later" or the plan button has been used */}
+      {active && <WhyItCosts toggle={status.ctaSeen} open={false} />}
 
       <div className="flex flex-row flex-wrap items-center justify-between gap-2">
         {active ? (
-          <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-1 text-[10px] sm:text-xs">
-            <a
-              href={status.topUpUrl ?? PUBLIK_ACCOUNT_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[#24A0ED] hover:underline"
-            >
-              {status.claimState === 'claimed'
-                ? 'Add credit'
-                : 'Link this computer to your publik account'}
-            </a>
-            <a
-              href={PUBLIK_PRICING_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[#24A0ED] hover:underline"
-            >
-              How pricing works
-            </a>
+          <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-2">
+            {/* (c) the primary button: the response's claim_url, opened in
+                the system browser; publikhq.com only (planCta) */}
+            <PlanCtaLink
+              status={status}
+              surface="first-run"
+              onClick={() => {
+                if (!status.ctaSeen) void run('later');
+              }}
+            />
+            {!status.ctaSeen && (
+              <Button action="later">{CTA_LATER_LABEL}</Button>
+            )}
           </div>
         ) : disconnected ? (
           <Button action="reconnect" primary>
