@@ -170,7 +170,10 @@ export type CouncilBlock = {
     chairStatus: 'pending' | 'streaming' | 'done' | 'skipped' | 'error';
     chairSkippedReason?: string;
     convergence: string[];
-    divergence: { point: string; positions: { model: string; stance: string }[] }[];
+    divergence: {
+      point: string;
+      positions: { model: string; stance: string }[];
+    }[];
     unique: { model: string; insight: string }[];
     /* Pre-run rough estimate (prompt tokens x per-model rate + a heuristic
        completion length) so the UI can show cost BEFORE the meter has real
@@ -189,7 +192,14 @@ export type CouncilBlock = {
 export type ErrorBlock = {
   id: string;
   type: 'error';
-  data: string;
+  /* Plain text, or a message with exactly one action link — the publik
+     402 ("add credit") shape. Never more than one link. */
+  data: string | ErrorBlockData;
+};
+
+export type ErrorBlockData = {
+  message: string;
+  action?: { label: string; href: string };
 };
 
 export type Block =

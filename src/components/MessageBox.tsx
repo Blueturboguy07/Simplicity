@@ -3,7 +3,14 @@
 /* eslint-disable @next/next/no-img-element */
 import React, { MutableRefObject } from 'react';
 import { cn } from '@/lib/utils';
-import { Disc3, Volume2, StopCircle, Layers3, Plus, CornerDownRight } from 'lucide-react';
+import {
+  Disc3,
+  Volume2,
+  StopCircle,
+  Layers3,
+  Plus,
+  CornerDownRight,
+} from 'lucide-react';
 import Markdown, { MarkdownToJSX, RuleType } from 'markdown-to-jsx';
 import Copy from './MessageActions/Copy';
 import Rewrite from './MessageActions/Rewrite';
@@ -17,7 +24,12 @@ import Citation from './MessageRenderer/Citation';
 import { annotateCitations } from './MessageRenderer/citationParser';
 import AnswerTabs from './AnswerTabs';
 import AssistantSteps from './AssistantSteps';
-import { CouncilBlock, ResearchBlock, TextBlock, UsageBlock } from '@/lib/types';
+import {
+  CouncilBlock,
+  ResearchBlock,
+  TextBlock,
+  UsageBlock,
+} from '@/lib/types';
 import Renderer from './Widgets/Renderer';
 import CodeBlock from './MessageRenderer/CodeBlock';
 import UsageLine from './MessageRenderer/UsageLine';
@@ -163,7 +175,10 @@ const MessageBox = ({
           )}
           <div className="flex flex-row items-center justify-between w-full text-black dark:text-white">
             <div className="flex flex-row items-center -ml-2">
-              <Rewrite rewrite={rewrite} messageId={section.message.messageId} />
+              <Rewrite
+                rewrite={rewrite}
+                messageId={section.message.messageId}
+              />
             </div>
             <div className="flex flex-row items-center -mr-2">
               <Copy initialMessage={parsedMessage} section={section} />
@@ -244,8 +259,20 @@ const MessageBox = ({
                     This answer failed
                   </p>
                   <p className="text-sm text-black/70 dark:text-white/70 mt-1">
-                    {String(block.data)}
+                    {typeof block.data === 'string'
+                      ? block.data
+                      : block.data.message}
                   </p>
+                  {typeof block.data !== 'string' && block.data.action && (
+                    <a
+                      href={block.data.action.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-block mt-2 text-sm font-medium text-[#24A0ED] hover:underline"
+                    >
+                      {block.data.action.label} →
+                    </a>
+                  )}
                 </div>
                 <button
                   type="button"

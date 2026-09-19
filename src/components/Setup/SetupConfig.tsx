@@ -8,8 +8,11 @@ import { Check } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import ProviderPicker from './ProviderPicker';
+import PublikCard from './PublikCard';
 import ModelProvider from '../Settings/Sections/Models/ModelProvider';
 import { useChat } from '@/lib/hooks/useChat';
+import { usePublikStatus } from '@/lib/hooks/usePublikStatus';
+import { pickDefaultModel } from '@/lib/models/catalog';
 
 const SetupConfig = ({
   configSections,
@@ -24,28 +27,47 @@ const SetupConfig = ({
   const [isLoading, setIsLoading] = useState(true);
   const [isFinishing, setIsFinishing] = useState(false);
   const { setChatModelProvider, setEmbeddingModelProvider } = useChat();
+  /* The packaged build's publik card. `status.available` is false on dev,
+     Docker and source builds, and the card simply does not render. */
+  const {
+    status: publik,
+    busy: publikBusy,
+    act: publikAct,
+  } = usePublikStatus([setupState]);
+
+  const fetchProviders = async () => {
+    try {
+      setIsLoading(true);
+      const res = await fetch('/api/providers');
+      if (!res.ok) throw new Error('Failed to fetch providers');
+
+      const data = await res.json();
+      setProviders(data.providers || []);
+    } catch (error) {
+      console.error('Error fetching providers:', error);
+      toast.error('Failed to load providers');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchProviders = async () => {
-      try {
-        setIsLoading(true);
-        const res = await fetch('/api/providers');
-        if (!res.ok) throw new Error('Failed to fetch providers');
-
-        const data = await res.json();
-        setProviders(data.providers || []);
-      } catch (error) {
-        console.error('Error fetching providers:', error);
-        toast.error('Failed to load providers');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     if (setupState === 2) {
       fetchProviders();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setupState]);
+
+  /* accept / retry / reconnect change the provider list server-side (a
+     mint adds the publik entry; decline removes it) — re-read it so the
+     "Your connections" list and the Start button agree with the card. */
+  const onPublikAction = async (
+    action: 'accept' | 'decline' | 'retry' | 'reconnect',
+  ) => {
+    const next = await publikAct(action);
+    await fetchProviders();
+    return next;
+  };
 
   /* Pick the models instead of asking.
    *
@@ -60,16 +82,28 @@ const SetupConfig = ({
    * preference, which is why other answer engines never surface it either.
    */
   const autoSelectModels = async () => {
-    const chatProvider = providers.find(
-      (p) => p.type !== 'transformers' && p.chatModels.length > 0,
-    );
-    if (chatProvider) {
-      localStorage.setItem('chatModelProviderId', chatProvider.id);
-      localStorage.setItem('chatModelKey', chatProvider.chatModels[0].key);
-      setChatModelProvider({
-        providerId: chatProvider.id,
-        key: chatProvider.chatModels[0].key,
-      });
+    /* One policy for the wizard and the chat box: pickDefaultModel — "Best"
+       (a key the user entered themselves wins; publik next; then local),
+       else the first catalog row, else the first model of the first
+       provider. */
+    const chatPick =
+      pickDefaultModel(
+        providers.filter(
+          (p) => p.type !== 'transformers' && p.chatModels.length > 0,
+        ),
+      ) ??
+      (() => {
+        const first = providers.find(
+          (p) => p.type !== 'transformers' && p.chatModels.length > 0,
+        );
+        return first
+          ? { providerId: first.id, key: first.chatModels[0].key }
+          : null;
+      })();
+    if (chatPick) {
+      localStorage.setItem('chatModelProviderId', chatPick.providerId);
+      localStorage.setItem('chatModelKey', chatPick.key);
+      setChatModelProvider(chatPick);
     }
 
     /* Embeddings are never a user-facing choice — they only rerank search
@@ -80,8 +114,9 @@ const SetupConfig = ({
        keyword order. Nothing registers Transformers on a fresh install, so
        without that fallback there'd be no embedding model at all. */
     let embeddingProvider =
-      providers.find((p) => p.type === 'ollama' && p.embeddingModels.length > 0) ??
-      providers.find((p) => p.embeddingModels.length > 0);
+      providers.find(
+        (p) => p.type === 'ollama' && p.embeddingModels.length > 0,
+      ) ?? providers.find((p) => p.embeddingModels.length > 0);
 
     if (!embeddingProvider) {
       try {
@@ -132,11 +167,17 @@ const SetupConfig = ({
     }
   };
 
+  /* The publik connection has its own card above; listing it again under
+     "Your connections" would show a key field for something that is not
+     pasted. */
   const visibleProviders = providers.filter(
-    (p) => p.name.toLowerCase() !== 'transformers',
+    (p) => p.name.toLowerCase() !== 'transformers' && p.type !== 'publik',
   );
   const hasProviders =
-    visibleProviders.filter((p) => p.chatModels.length > 0).length > 0;
+    providers.filter(
+      (p) => p.name.toLowerCase() !== 'transformers' && p.chatModels.length > 0,
+    ).length > 0;
+  const showPublik = Boolean(publik?.available);
 
   return (
     <div className="w-[95vw] md:w-[80vw] lg:w-[65vw] mx-auto px-2 sm:px-4 md:px-6 flex flex-col space-y-6">
@@ -153,10 +194,14 @@ const SetupConfig = ({
           <div className="flex-1 overflow-y-auto px-3 sm:px-4 md:px-6 py-4 md:py-6">
             <div className="mb-4 md:mb-6 pb-3 md:pb-4 border-b border-light-200 dark:border-dark-200">
               <p className="text-xs sm:text-sm font-medium text-black dark:text-white">
-                Choose a provider
+                {showPublik
+                  ? 'Simplicity uses publik API'
+                  : 'Choose a provider'}
               </p>
               <p className="text-[10px] sm:text-xs text-black/50 dark:text-white/50 mt-0.5">
-                Connect at least one to get started. You can add more later.
+                {showPublik
+                  ? 'Ready in one click — or connect your own provider below. You can add more later.'
+                  : 'Connect at least one to get started. You can add more later.'}
               </p>
             </div>
 
@@ -168,6 +213,18 @@ const SetupConfig = ({
               </div>
             ) : (
               <>
+                {showPublik && publik && publik.state !== 'declined' && (
+                  <PublikCard
+                    status={publik}
+                    busy={publikBusy}
+                    onAction={onPublikAction}
+                  />
+                )}
+                {showPublik && (
+                  <p className="mb-3 text-[10px] sm:text-xs font-medium uppercase tracking-wide text-black/40 dark:text-white/40">
+                    Or connect your own provider
+                  </p>
+                )}
                 <ProviderPicker
                   modelProviders={configSections.modelProviders}
                   providers={providers}

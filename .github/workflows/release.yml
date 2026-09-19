@@ -1,0 +1,145 @@
+# Tag-triggered packaged builds with the publik app token baked in.
+#
+# The tag BUILDS; it does not publish. Create a DRAFT release for the tag
+# first (`gh release create vX.Y.Z --draft ...`), push the tag, let both
+# jobs upload into the draft, open the DMG on a Mac, then press Publish —
+# only a published, non-prerelease release moves README's
+# releases/latest links and publik's catalog.
+#
+# Windows needs exactly one secret: PUBLIK_APP_TOKEN. It never depends on
+# Apple signing secrets.
+#
+# macOS signs + notarizes only when the Apple secrets exist
+# (CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD,
+# APPLE_TEAM_ID — same names as NitroAI). Without them the job still
+# builds an ad-hoc-signed DMG as a workflow ARTIFACT for inspection and
+# does NOT upload it to the release: the listing declares the mac build
+# notarized, and an unsigned asset would make that a lie.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: yarn test
+
+      - run: yarn dist:win
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+
+      - name: Assert the publik token is in the payload and not in the client bundle
+        shell: pwsh
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:PUBLIK_APP_TOKEN) { throw "PUBLIK_APP_TOKEN secret is not set - refusing to build a release exe without it" }
+          $standalone = Join-Path $PWD '.next\standalone'
+          if (!(Test-Path (Join-Path $standalone 'publik-app.json'))) { throw "publik-app.json missing from the standalone payload" }
+          $leak = Get-ChildItem -Recurse -File (Join-Path $standalone '.next\static') | Select-String -SimpleMatch -Pattern $env:PUBLIK_APP_TOKEN -List
+          if ($leak) { throw "publik app token leaked into the client bundle" }
+          if (!(Test-Path 'release\Simplicity-Setup-Windows.exe')) { throw "installer was not produced" }
+
+      - name: Upload to the release for this tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${env:GITHUB_REF_NAME}" release/Simplicity-Setup-Windows.exe --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Simplicity-Setup-Windows
+          path: release/Simplicity-Setup-Windows.exe
+          if-no-files-found: error
+
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: yarn test
+
+      # Secrets cannot be read in a job-level `if`; decide here instead.
+      - name: Detect Apple signing secrets
+        id: apple
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$CSC_LINK" ] && [ -n "$APPLE_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+            echo "signed=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::Apple signing secrets absent — building an ad-hoc DMG as an artifact only"
+          fi
+
+      - name: Build (signed + notarized when secrets exist)
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+          MAC_SIGN: ${{ steps.apple.outputs.signed }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$PUBLIK_APP_TOKEN" ]; then
+            echo "PUBLIK_APP_TOKEN secret is not set — refusing to build a release DMG without it" >&2
+            exit 1
+          fi
+          yarn dist:mac
+
+      - name: Assert the publik token is in the sealed bundle and not in the client bundle
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -e
+          app="release/mac-arm64/Simplicity.app/Contents/Resources/.next/standalone"
+          test -s "$app/publik-app.json"
+          if grep -rqF "$PUBLIK_APP_TOKEN" "$app/.next/static"; then
+            echo "publik app token leaked into the client bundle" >&2
+            exit 1
+          fi
+          test -f release/Simplicity-mac-arm64.dmg
+
+      - name: Verify the notarized dmg opens clean
+        if: steps.apple.outputs.signed == '1'
+        run: |
+          xcrun stapler validate release/Simplicity-mac-arm64.dmg || xcrun stapler staple release/Simplicity-mac-arm64.dmg
+          spctl -a -t open --context context:primary-signature -v release/Simplicity-mac-arm64.dmg
+
+      - name: Upload to the release for this tag
+        if: steps.apple.outputs.signed == '1' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" release/Simplicity-mac-arm64.dmg --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apple.outputs.signed == '1' && 'Simplicity-mac-arm64' || 'Simplicity-mac-arm64-UNSIGNED' }}
+          path: release/Simplicity-mac-arm64.dmg
+          if-no-files-found: error

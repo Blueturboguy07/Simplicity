@@ -19,6 +19,8 @@
 
 The first run downloads the local search engine (~150 MB, one time). If you want free local AI models, the setup screen installs [Ollama](https://ollama.com) for you with one click on macOS (Windows: install Ollama yourself from [ollama.com/download](https://ollama.com/download), then click Install again — Simplicity picks it up automatically) — or plug in an API key (OpenAI, Anthropic, Google, Groq, xAI) or connect your existing Claude subscription for free frontier-model answers.
 
+**Packaged builds (the DMG / EXE from Releases) also ship with publik API as the default provider.** On first run the setup screen shows a short disclosure — every request is priced per use at 50% of the model's published list price from your publik balance (most people spend under $2 a month), and your questions go through publik's servers to a shared model account — with **Continue with publik API** and **Use my own key instead** side by side. Nothing is sent until you continue. You can remove the publik connection from Settings → Models at any time and use any of the providers above instead; builds from source and Docker have no publik token and behave exactly as before.
+
 ### Uninstalling
 
 See [UNINSTALL.md](UNINSTALL.md) for exactly what Simplicity writes to disk and how to remove all of it — on macOS, `./scripts/uninstall.sh` does it in one step.

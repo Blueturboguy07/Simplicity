@@ -38,6 +38,30 @@ export type CatalogRow = {
 };
 
 export const CATALOG_ROWS: CatalogRow[] = [
+  /* publik API tiers. These are aliases, not real model names — the one
+     deliberate exception to the rule above, because the alias IS the swap
+     seam: the served model can change under it without a release. The
+     served slug is a fact about a given answer, not a promise, so it lives
+     in the usage line (x-publik-model), not the picker. Only listed when
+     the packaged build has provisioned a publik connection. */
+  {
+    id: 'publik-balanced',
+    name: 'Balanced · publik',
+    icon: 'publik',
+    candidates: [{ providerType: 'publik', key: 'publik-balanced' }],
+  },
+  {
+    id: 'publik-fast',
+    name: 'Fast · publik',
+    icon: 'publik',
+    candidates: [{ providerType: 'publik', key: 'publik-fast' }],
+  },
+  {
+    id: 'publik-smart',
+    name: 'Smart · publik',
+    icon: 'publik',
+    candidates: [{ providerType: 'publik', key: 'publik-smart' }],
+  },
   {
     id: 'local',
     name: 'Local (Ollama)',
@@ -171,6 +195,11 @@ export const BEST_ORDER: Array<{ providerType: string; key: string }> = [
   { providerType: 'anthropic', key: 'claude-sonnet-5' },
   { providerType: 'gemini', key: 'models/gemini-2.5-pro' },
   { providerType: 'xai', key: 'grok-4' },
+  /* After every key the user entered themselves (a user-entered key always
+     wins), before the local Ollama rows: on the packaged first run only
+     publik is connected, so "Best" resolves here. A pasted BYO key moves
+     "Best" without touching the publik connection. */
+  { providerType: 'publik', key: 'publik-balanced' },
   { providerType: 'ollama', key: 'qwen2.5:7b' },
   { providerType: 'ollama', key: 'qwen2.5:3b' },
 ];

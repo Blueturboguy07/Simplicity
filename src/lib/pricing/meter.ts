@@ -1,4 +1,8 @@
-import { resolvePricingKey, estimateCostUSD, FREE_PROVIDER_TYPES } from './table';
+import {
+  resolvePricingKey,
+  estimateCostUSD,
+  FREE_PROVIDER_TYPES,
+} from './table';
 
 /* One meter per turn. Every LLM call attached to it pushes a raw record;
    aggregation groups by providerId + model so parallel calls (council

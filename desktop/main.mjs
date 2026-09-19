@@ -104,6 +104,27 @@ function prepareDataDir(searxngURL) {
   fs.writeFileSync(file, JSON.stringify(config, null, 2));
 }
 
+/* The packaged build carries its publik app token next to the server it
+   ships with (written by desktop/prepare.mjs at build time). Dev runs and
+   source builds have no such file, and the server treats the missing env as
+   "no publik" — nothing else changes. The token reaches the Next server
+   process only; the renderer (contextIsolation, no nodeIntegration) talks to
+   it over HTTP and /api/publik never returns the token or the key. */
+function publikEnv() {
+  try {
+    const file = path.join(standaloneDir(), 'publik-app.json');
+    const { token, baseUrl } = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!token) return {};
+    return {
+      PUBLIK_APP_TOKEN: token,
+      PUBLIK_API_BASE_URL: baseUrl || 'https://publikhq.com/api/v1',
+      PUBLIK_APP_VERSION: app.getVersion(),
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function isServing(url) {
   if (!url) return false;
   try {
@@ -137,6 +158,7 @@ async function startServer() {
       DATA_DIR: dataDir(),
       PORT: String(port),
       HOSTNAME: '127.0.0.1',
+      ...publikEnv(),
     },
     /* Send the child's output to a log rather than discarding it — a packaged
        app has nowhere to print, and without this a startup failure surfaces

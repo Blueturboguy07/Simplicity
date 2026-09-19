@@ -27,6 +27,38 @@ for (const [from, to] of [
   console.log(`copied ${path.relative(root, from)} → ${path.relative(root, to)}`);
 }
 
+/* Bake the publik app token into the standalone payload as a JSON file the
+ * Electron main process reads at launch (desktop/main.mjs publikEnv()). CI
+ * sets PUBLIK_APP_TOKEN from a repository secret; a local build without it
+ * produces a BYO-only app, which is the right thing for a build nobody will
+ * distribute. A file next to the server, not next.config `env:` inlining —
+ * Next's env map replaces process.env.X at compile time in EVERY bundle that
+ * references it, so one careless client-side reference would ship the token
+ * to the renderer. A file read only by the main process cannot leak that way.
+ * The token is an app identifier with abuse limits, not a cryptographic
+ * secret; it is never logged here.
+ */
+const publikFile = path.join(standalone, 'publik-app.json');
+fs.rmSync(publikFile, { force: true });
+const publikToken = process.env.PUBLIK_APP_TOKEN ?? '';
+if (publikToken) {
+  fs.writeFileSync(
+    publikFile,
+    JSON.stringify(
+      {
+        app: 'simplicity',
+        token: publikToken,
+        baseUrl: process.env.PUBLIK_API_BASE_URL || 'https://publikhq.com/api/v1',
+      },
+      null,
+      2,
+    ),
+  );
+  console.log('publik app token baked in (publik-app.json)');
+} else {
+  console.log('WARNING: no PUBLIK_APP_TOKEN — BYO-only build (no publik-app.json)');
+}
+
 /* Next's file tracing sweeps in our own build tooling — most damagingly the
  * `electron` package, which carries a complete Electron.app (~296 MB). Nesting
  * that inside the packaged Electron.app doubles the bundle AND breaks signing:

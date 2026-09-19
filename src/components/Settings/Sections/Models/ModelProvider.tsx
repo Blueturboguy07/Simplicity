@@ -8,6 +8,9 @@ import { AlertCircle, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import DeleteProvider from './DeleteProviderDialog';
+import { usePublikStatus } from '@/lib/hooks/usePublikStatus';
+import { PUBLIK_ACCOUNT_URL, PUBLIK_PRICING_URL } from '@/lib/publik/types';
+import { Disclosure, StatusLine } from '@/components/Setup/PublikCard';
 
 /* Settings only ever needs to show and edit a connection's credentials — which
    fields those are (an API key, a base URL, both, or none) comes straight from
@@ -26,6 +29,11 @@ const ModelProvider = ({
 }) => {
   const [config, setConfig] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(false);
+  /* publik is provisioned, not pasted: its key is shown masked and
+     read-only, there is no Save, and the card carries the balance line.
+     "Remove connection" is the "use my own key instead" path from here. */
+  const isPublik = modelProvider.type === 'publik';
+  const { status: publik } = usePublikStatus([isPublik]);
 
   useEffect(() => {
     /* Auto-registered providers (transformers, a connected Claude account)
@@ -94,13 +102,50 @@ const ModelProvider = ({
             {modelProvider.name}
           </p>
         </div>
-        <DeleteProvider modelProvider={modelProvider} setProviders={setProviders} />
+        <DeleteProvider
+          modelProvider={modelProvider}
+          setProviders={setProviders}
+        />
       </div>
       <div className="flex flex-col gap-y-3 px-5 py-4">
         {errorMessage && (
           <div className="flex flex-row items-center gap-2 text-xs lg:text-xs text-red-500 dark:text-red-400 rounded-lg bg-red-50 dark:bg-red-950/20 px-3 py-2 border border-red-200 dark:border-red-900/30">
             <AlertCircle size={16} className="shrink-0" />
             <span className="break-words">{errorMessage}</span>
+          </div>
+        )}
+        {isPublik && publik && (
+          <div className="flex flex-col gap-2">
+            <StatusLine status={publik} />
+            <Disclosure compact />
+            <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <a
+                href={publik.topUpUrl ?? PUBLIK_ACCOUNT_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#24A0ED] hover:underline"
+              >
+                {publik.claimState === 'claimed'
+                  ? 'Add credit'
+                  : 'Link this computer to your publik account'}
+              </a>
+              <a
+                href={PUBLIK_PRICING_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#24A0ED] hover:underline"
+              >
+                How pricing works
+              </a>
+              <a
+                href={PUBLIK_ACCOUNT_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[#24A0ED] hover:underline"
+              >
+                Manage at publikhq.com
+              </a>
+            </div>
           </div>
         )}
         {fields.length === 0 ? (
@@ -126,11 +171,19 @@ const ModelProvider = ({
                 placeholder={(field as StringUIConfigField).placeholder}
                 type={field.type === 'password' ? 'password' : 'text'}
                 required={field.required}
+                readOnly={isPublik}
+                disabled={isPublik}
               />
             </div>
           ))
         )}
-        {fields.length > 0 && (
+        {isPublik && (
+          <p className="text-[11px] text-black/40 dark:text-white/40">
+            Managed by publik · issued to this computer. Remove the connection
+            to use your own key instead.
+          </p>
+        )}
+        {fields.length > 0 && !isPublik && (
           <div className="flex justify-end pt-1">
             <button
               onClick={handleSave}

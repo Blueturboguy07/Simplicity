@@ -25,6 +25,14 @@ type OpenAIConfig = {
   model: string;
   baseURL?: string;
   options?: GenerateOptions;
+  /* All three optional and unset for the `openai` type; only the publik
+     provider supplies them. `onResponse` sees every response's headers
+     (the gateway's x-publik-* balance line); `mapError` gets a chance to
+     turn an SDK APIError into a typed one (402 → PublikCreditError) before
+     it propagates. The wire shape is unchanged either way. */
+  defaultHeaders?: Record<string, string>;
+  onResponse?: (headers: Headers) => void;
+  mapError?: (err: unknown) => unknown;
 };
 
 class OpenAILLM extends BaseLLM<OpenAIConfig> {
@@ -36,7 +44,24 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
     this.openAIClient = new OpenAI({
       apiKey: this.config.apiKey,
       baseURL: this.config.baseURL || 'https://api.openai.com/v1',
+      ...(this.config.defaultHeaders
+        ? { defaultHeaders: this.config.defaultHeaders }
+        : {}),
     });
+  }
+
+  /* `.withResponse()` returns the same `data` the code used before plus the
+     raw Response, so the hooks cost nothing when unset. */
+  private async call<T>(promise: {
+    withResponse(): Promise<{ data: T; response: Response }>;
+  }): Promise<T> {
+    try {
+      const { data, response } = await promise.withResponse();
+      this.config.onResponse?.(response.headers);
+      return data;
+    } catch (err) {
+      throw this.config.mapError ? this.config.mapError(err) : err;
+    }
   }
 
   convertToOpenAIMessages(messages: Message[]): ChatCompletionMessageParam[] {
@@ -83,31 +108,36 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
       });
     });
 
-    const response = await this.openAIClient.chat.completions.create({
-      model: this.config.model,
-      tools: openaiTools.length > 0 ? openaiTools : undefined,
-      messages: this.convertToOpenAIMessages(input.messages),
-      temperature:
-        input.options?.temperature ?? this.config.options?.temperature ?? 1.0,
-      top_p: input.options?.topP ?? this.config.options?.topP,
-      max_completion_tokens:
-        input.options?.maxTokens ?? this.config.options?.maxTokens,
-      stop: input.options?.stopSequences ?? this.config.options?.stopSequences,
-      frequency_penalty:
-        input.options?.frequencyPenalty ??
-        this.config.options?.frequencyPenalty,
-      presence_penalty:
-        input.options?.presencePenalty ?? this.config.options?.presencePenalty,
-      ...(input.options?.reasoningEffort
-        ? { reasoning_effort: input.options.reasoningEffort }
-        : {}),
-    });
+    const response = await this.call(
+      this.openAIClient.chat.completions.create({
+        model: this.config.model,
+        tools: openaiTools.length > 0 ? openaiTools : undefined,
+        messages: this.convertToOpenAIMessages(input.messages),
+        temperature:
+          input.options?.temperature ?? this.config.options?.temperature ?? 1.0,
+        top_p: input.options?.topP ?? this.config.options?.topP,
+        max_completion_tokens:
+          input.options?.maxTokens ?? this.config.options?.maxTokens,
+        stop:
+          input.options?.stopSequences ?? this.config.options?.stopSequences,
+        frequency_penalty:
+          input.options?.frequencyPenalty ??
+          this.config.options?.frequencyPenalty,
+        presence_penalty:
+          input.options?.presencePenalty ??
+          this.config.options?.presencePenalty,
+        ...(input.options?.reasoningEffort
+          ? { reasoning_effort: input.options.reasoningEffort }
+          : {}),
+      }),
+    );
 
     if (response.usage) {
       this.recordUsage({
         inputTokens: response.usage.prompt_tokens ?? 0,
         outputTokens: response.usage.completion_tokens ?? 0,
-        cachedInputTokens: response.usage.prompt_tokens_details?.cached_tokens ?? 0,
+        cachedInputTokens:
+          response.usage.prompt_tokens_details?.cached_tokens ?? 0,
       });
     }
 
@@ -151,29 +181,33 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
       });
     });
 
-    const stream = await this.openAIClient.chat.completions.create({
-      model: this.config.model,
-      messages: this.convertToOpenAIMessages(input.messages),
-      tools: openaiTools.length > 0 ? openaiTools : undefined,
-      temperature:
-        input.options?.temperature ?? this.config.options?.temperature ?? 1.0,
-      top_p: input.options?.topP ?? this.config.options?.topP,
-      max_completion_tokens:
-        input.options?.maxTokens ?? this.config.options?.maxTokens,
-      stop: input.options?.stopSequences ?? this.config.options?.stopSequences,
-      frequency_penalty:
-        input.options?.frequencyPenalty ??
-        this.config.options?.frequencyPenalty,
-      presence_penalty:
-        input.options?.presencePenalty ?? this.config.options?.presencePenalty,
-      ...(input.options?.reasoningEffort
-        ? { reasoning_effort: input.options.reasoningEffort }
-        : {}),
-      stream: true,
-      /* Without this the final SSE chunk carries no usage at all and the
+    const stream = await this.call(
+      this.openAIClient.chat.completions.create({
+        model: this.config.model,
+        messages: this.convertToOpenAIMessages(input.messages),
+        tools: openaiTools.length > 0 ? openaiTools : undefined,
+        temperature:
+          input.options?.temperature ?? this.config.options?.temperature ?? 1.0,
+        top_p: input.options?.topP ?? this.config.options?.topP,
+        max_completion_tokens:
+          input.options?.maxTokens ?? this.config.options?.maxTokens,
+        stop:
+          input.options?.stopSequences ?? this.config.options?.stopSequences,
+        frequency_penalty:
+          input.options?.frequencyPenalty ??
+          this.config.options?.frequencyPenalty,
+        presence_penalty:
+          input.options?.presencePenalty ??
+          this.config.options?.presencePenalty,
+        ...(input.options?.reasoningEffort
+          ? { reasoning_effort: input.options.reasoningEffort }
+          : {}),
+        stream: true,
+        /* Without this the final SSE chunk carries no usage at all and the
          writer's cost silently reports as zero. */
-      stream_options: { include_usage: true },
-    });
+        stream_options: { include_usage: true },
+      }),
+    );
 
     let recievedToolCalls: { name: string; id: string; arguments: string }[] =
       [];
@@ -224,28 +258,33 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
   }
 
   async generateObject<T>(input: GenerateObjectInput): Promise<T> {
-    const response = await this.openAIClient.chat.completions.parse({
-      messages: this.convertToOpenAIMessages(input.messages),
-      model: this.config.model,
-      temperature:
-        input.options?.temperature ?? this.config.options?.temperature ?? 1.0,
-      top_p: input.options?.topP ?? this.config.options?.topP,
-      max_completion_tokens:
-        input.options?.maxTokens ?? this.config.options?.maxTokens,
-      stop: input.options?.stopSequences ?? this.config.options?.stopSequences,
-      frequency_penalty:
-        input.options?.frequencyPenalty ??
-        this.config.options?.frequencyPenalty,
-      presence_penalty:
-        input.options?.presencePenalty ?? this.config.options?.presencePenalty,
-      response_format: zodResponseFormat(input.schema, 'object'),
-    });
+    const response = await this.call(
+      this.openAIClient.chat.completions.parse({
+        messages: this.convertToOpenAIMessages(input.messages),
+        model: this.config.model,
+        temperature:
+          input.options?.temperature ?? this.config.options?.temperature ?? 1.0,
+        top_p: input.options?.topP ?? this.config.options?.topP,
+        max_completion_tokens:
+          input.options?.maxTokens ?? this.config.options?.maxTokens,
+        stop:
+          input.options?.stopSequences ?? this.config.options?.stopSequences,
+        frequency_penalty:
+          input.options?.frequencyPenalty ??
+          this.config.options?.frequencyPenalty,
+        presence_penalty:
+          input.options?.presencePenalty ??
+          this.config.options?.presencePenalty,
+        response_format: zodResponseFormat(input.schema, 'object'),
+      }),
+    );
 
     if (response.usage) {
       this.recordUsage({
         inputTokens: response.usage.prompt_tokens ?? 0,
         outputTokens: response.usage.completion_tokens ?? 0,
-        cachedInputTokens: response.usage.prompt_tokens_details?.cached_tokens ?? 0,
+        cachedInputTokens:
+          response.usage.prompt_tokens_details?.cached_tokens ?? 0,
       });
     }
 
@@ -294,23 +333,31 @@ class OpenAILLM extends BaseLLM<OpenAIConfig> {
       },
     });
 
-    for await (const chunk of stream) {
-      if (chunk.type === 'response.output_text.delta' && chunk.delta) {
-        recievedObj += chunk.delta;
+    /* ResponseStream has no withResponse(); errors still get mapped. */
+    const mapped = (err: unknown) =>
+      this.config.mapError ? this.config.mapError(err) : err;
 
-        try {
-          yield parse(recievedObj) as T;
-        } catch (err) {
-          console.log('Error parsing partial object from OpenAI:', err);
-          yield {} as T;
-        }
-      } else if (chunk.type === 'response.output_text.done' && chunk.text) {
-        try {
-          yield parse(chunk.text) as T;
-        } catch (err) {
-          throw new Error(`Error parsing response from OpenAI: ${err}`);
+    try {
+      for await (const chunk of stream) {
+        if (chunk.type === 'response.output_text.delta' && chunk.delta) {
+          recievedObj += chunk.delta;
+
+          try {
+            yield parse(recievedObj) as T;
+          } catch (err) {
+            console.log('Error parsing partial object from OpenAI:', err);
+            yield {} as T;
+          }
+        } else if (chunk.type === 'response.output_text.done' && chunk.text) {
+          try {
+            yield parse(chunk.text) as T;
+          } catch (err) {
+            throw new Error(`Error parsing response from OpenAI: ${err}`);
+          }
         }
       }
+    } catch (err) {
+      throw mapped(err);
     }
   }
 }

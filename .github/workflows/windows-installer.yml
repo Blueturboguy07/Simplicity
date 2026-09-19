@@ -32,7 +32,28 @@ jobs:
 
       - run: yarn install --frozen-lockfile --network-timeout 600000
 
+      - run: yarn test
+
+      # PUBLIK_APP_TOKEN is the public app token the packaged build
+      # provisions its publik API key with (desktop/prepare.mjs). Absent
+      # secret → BYO-only build, which the step below turns into a hard
+      # failure so a token-less exe is never mistaken for a release build.
       - run: yarn dist:win
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+
+      - name: Assert the publik token is in the payload and not in the client bundle
+        shell: pwsh
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:PUBLIK_APP_TOKEN) { throw "PUBLIK_APP_TOKEN secret is not set - refusing to build a release exe without it" }
+          $standalone = Join-Path $PWD '.next\standalone'
+          if (!(Test-Path (Join-Path $standalone 'publik-app.json'))) { throw "publik-app.json missing from the standalone payload" }
+          $leak = Get-ChildItem -Recurse -File (Join-Path $standalone '.next\static') | Select-String -SimpleMatch -Pattern $env:PUBLIK_APP_TOKEN -List
+          if ($leak) { throw "publik app token leaked into the client bundle" }
+          Write-Host "publik token baked into the server payload only"
 
       - name: Smoke-test install + uninstall
         shell: pwsh

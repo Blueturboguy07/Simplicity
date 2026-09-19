@@ -23,6 +23,8 @@ const brands: Record<string, { icon?: IconType; letters?: string }> = {
   groq: { letters: 'G' },
   lemonade: { letters: 'L' },
   xai: { letters: 'X' },
+  /* No vendor mark, no invented logo — same lettermark fallback as groq. */
+  publik: { letters: 'pk' },
 };
 
 const ProviderLogo = ({
