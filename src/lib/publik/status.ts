@@ -43,12 +43,16 @@ export async function getPublikStatus(
     addCreditUrl,
     /* exactly one actionable link, chosen by claim state (CONTRACT §1) */
     topUpUrl:
-      claimState === 'claimed'
+      snap.topUpUrl ??
+      (claimState === 'claimed'
         ? (addCreditUrl ?? claimUrl)
-        : (claimUrl ?? addCreditUrl),
+        : (claimUrl ?? addCreditUrl)),
     claimState,
     balanceMicros: snap.balanceMicros ?? state?.starterMicros ?? null,
     starterRemainingMicros: snap.starterRemainingMicros,
+    starterGrantMicros: state?.starterMicros ?? null,
+    creditError: snap.creditError,
+    ctaSeen: Boolean(state?.ctaSeenAt),
     week: {
       usedMicros: snap.weekUsedMicros,
       budgetMicros: snap.weekBudgetMicros,

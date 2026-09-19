@@ -11,7 +11,7 @@ import ProviderPicker from './ProviderPicker';
 import PublikCard from './PublikCard';
 import ModelProvider from '../Settings/Sections/Models/ModelProvider';
 import { useChat } from '@/lib/hooks/useChat';
-import { usePublikStatus } from '@/lib/hooks/usePublikStatus';
+import { PublikAction, usePublikStatus } from '@/lib/hooks/usePublikStatus';
 import { pickDefaultModel } from '@/lib/models/catalog';
 
 const SetupConfig = ({
@@ -61,11 +61,11 @@ const SetupConfig = ({
   /* accept / retry / reconnect change the provider list server-side (a
      mint adds the publik entry; decline removes it) — re-read it so the
      "Your connections" list and the Start button agree with the card. */
-  const onPublikAction = async (
-    action: 'accept' | 'decline' | 'retry' | 'reconnect',
-  ) => {
+  const onPublikAction = async (action: PublikAction) => {
     const next = await publikAct(action);
-    await fetchProviders();
+    /* "later" only records that the plan CTA was shown; the provider list
+       is unchanged, so there is nothing to re-read. */
+    if (action !== 'later') await fetchProviders();
     return next;
   };
 

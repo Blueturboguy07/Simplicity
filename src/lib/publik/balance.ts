@@ -16,6 +16,10 @@ export type BalanceSnapshot = {
   weekResetsAt: string | null;
   claimUrl: string | null;
   addCreditUrl: string | null;
+  topUpUrl: string | null;
+  /* The last 402 (message + its one link), cleared by the next metered
+     response — the banner reads it, the chat route writes it. */
+  creditError: { message: string; topUpUrl: string | null } | null;
   servedModel: string | null;
   lastChargeMicros: number | null;
   seenAt: number;
@@ -30,6 +34,8 @@ const empty = (): BalanceSnapshot => ({
   weekResetsAt: null,
   claimUrl: null,
   addCreditUrl: null,
+  topUpUrl: null,
+  creditError: null,
   servedModel: null,
   lastChargeMicros: null,
   seenAt: 0,
@@ -52,6 +58,8 @@ export class PublikBalanceCache {
 
     this.snap.balanceMicros = balance;
     this.snap.seenAt = Date.now();
+    /* A metered call was admitted, so the last 402 is stale. */
+    this.snap.creditError = null;
 
     const starter = int(headers.get('x-publik-starter-remaining'));
     this.snap.starterRemainingMicros = starter ?? 0;
@@ -93,7 +101,14 @@ export class PublikBalanceCache {
     if (w.claim_url !== undefined) this.snap.claimUrl = w.claim_url ?? null;
     if (w.add_credit_url !== undefined)
       this.snap.addCreditUrl = w.add_credit_url ?? null;
+    if (w.top_up_url !== undefined) this.snap.topUpUrl = w.top_up_url ?? null;
     this.snap.seenAt = Date.now();
+  }
+
+  /* A 402 came back (CONTRACT §12.3): keep its message and its one link so
+     the banner can show them outside the chat that hit the wall. */
+  noteCreditError(message: string, topUpUrl: string | null) {
+    this.snap.creditError = { message, topUpUrl };
   }
 
   peek(): BalanceSnapshot {

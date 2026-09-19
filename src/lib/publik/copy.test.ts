@@ -14,6 +14,9 @@ import path from 'node:path';
 const root = path.resolve(__dirname, '../../..');
 const files = [
   'src/components/Setup/PublikCard.tsx',
+  'src/components/Publik/PlanCta.tsx',
+  'src/components/Publik/PublikBanner.tsx',
+  'src/lib/publik/cta.ts',
   'src/components/Setup/ProviderPicker.tsx',
   'src/components/Settings/Sections/Models/ModelProvider.tsx',
   'src/components/Settings/Sections/Models/AddProviderDialog.tsx',
@@ -95,6 +98,20 @@ describe('publik copy rule', () => {
     expect(read('src/components/Setup/ProviderPicker.tsx')).not.toMatch(
       /Publik API|PUBLIK API/,
     );
+  });
+
+  it('the plan CTA (CONTRACT §12) carries the one justification and the exact labels', () => {
+    const cta = read('src/lib/publik/cta.ts');
+    expect(cta).toMatch(/A provider charges for every request the app makes/);
+    expect(cta).toMatch(/passes it on at half the provider's list price/);
+    expect(cta).toMatch(/Nothing is charged behind your back/);
+    expect(cta).toMatch(/CTA_LINK_LABEL = 'Link this computer & pick a plan'/);
+    expect(cta).toMatch(/CTA_PICK_LABEL = 'Pick a plan'/);
+    expect(cta).toMatch(/CTA_MANAGE_LABEL = 'Manage plan'/);
+    expect(cta).toMatch(/WHY_IT_COSTS_LABEL = 'Why it costs money'/);
+    /* the amount is never in the copy: it comes from the response */
+    expect(cta).not.toMatch(/\$0\.\d\d/);
+    expect(read('src/components/Publik/PlanCta.tsx')).not.toMatch(/\$\d/);
   });
 
   it('the disclosure never hardcodes the free-balance amount', () => {
