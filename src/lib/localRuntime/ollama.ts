@@ -15,6 +15,8 @@
 import { spawn, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFile);
@@ -65,6 +67,14 @@ const binDir = () => path.join(process.env.DATA_DIR || process.cwd(), 'bin');
 const DARWIN_TGZ =
   'https://github.com/ollama/ollama/releases/latest/download/ollama-darwin.tgz';
 
+/* The official standalone Windows archive. Same shape as DARWIN_TGZ above —
+   ollama.exe at the top plus a sibling lib/ollama/ runtime directory — just
+   zipped instead of tar'd, and far bigger (confirmed live: ~1.46 GB vs the
+   darwin tgz's ~150 MB) because it bundles CUDA v12/v13 and Vulkan backends
+   that the mac build doesn't need. */
+const WINDOWS_ZIP =
+  'https://github.com/ollama/ollama/releases/latest/download/ollama-windows-amd64.zip';
+
 /* Locate an ollama binary: PATH first (Homebrew / official installer), then our
    own downloaded copy. A packaged app gets a minimal PATH, so the well-known
    install locations are checked explicitly rather than trusting `which`. */
@@ -104,19 +114,22 @@ async function downloadBinary(onLog: (m: string) => void): Promise<string> {
   const dir = binDir();
   fs.mkdirSync(dir, { recursive: true });
 
-  if (process.platform !== 'darwin') {
-    /* Real gap, not a bug to paper over: we only know how to unpack the
-       macOS build here (see DARWIN_TGZ below). The button above this error
-       is always labeled "Install" — never "Connect" — so the message has to
-       say to click that, or a careful reader ends up looking for a control
-       that doesn't exist. Once Ollama is on this machine, findBinary() above
-       picks it up on the very next call, so re-clicking Install is genuinely
-       enough to finish setup — this isn't a dead end. */
-    throw new Error(
-      "Automatic download isn't available on this platform yet. Install Ollama yourself from https://ollama.com/download, then click Install again — Simplicity will detect it and finish setup from there.",
-    );
-  }
+  if (process.platform === 'darwin') return downloadDarwinBinary(dir, onLog);
+  if (process.platform === 'win32') return downloadWindowsBinary(dir, onLog);
 
+  /* Real gap, not a bug to paper over: darwin and win32 (above) are the only
+     archives we know how to fetch and unpack. The button above this error is
+     always labeled "Install" — never "Connect" — so the message has to say
+     to click that, or a careful reader ends up looking for a control that
+     doesn't exist. Once Ollama is on this machine, findBinary() above picks
+     it up on the very next call, so re-clicking Install is genuinely enough
+     to finish setup — this isn't a dead end. */
+  throw new Error(
+    "Automatic download isn't available on this platform yet. Install Ollama yourself from https://ollama.com/download, then click Install again — Simplicity will detect it and finish setup from there.",
+  );
+}
+
+async function downloadDarwinBinary(dir: string, onLog: (m: string) => void): Promise<string> {
   onLog('Downloading the local engine — a one-time download of about 150 MB.');
   const res = await fetch(DARWIN_TGZ, { headers: { 'user-agent': 'Simplicity' } });
   if (!res.ok) throw new Error(`Couldn't download Ollama (${res.status})`);
@@ -134,6 +147,47 @@ async function downloadBinary(onLog: (m: string) => void): Promise<string> {
     throw new Error("The download didn't contain the expected files. Try again.");
   }
   fs.chmodSync(bin, 0o755);
+  return bin;
+}
+
+async function downloadWindowsBinary(dir: string, onLog: (m: string) => void): Promise<string> {
+  /* Upstream's Windows package bundles CUDA + Vulkan backends into one
+     archive (there's no CPU-only variant), so this is genuinely a much
+     bigger download than the macOS one — say the real size rather than
+     repeat the mac number. */
+  onLog('Downloading the local engine — a one-time download of about 1.4 GB.');
+  const res = await fetch(WINDOWS_ZIP, { headers: { 'user-agent': 'Simplicity' } });
+  if (!res.ok) throw new Error(`Couldn't download Ollama (${res.status})`);
+
+  const zip = path.join(dir, 'ollama-windows-amd64.zip');
+  /* Streamed to disk rather than buffered through res.arrayBuffer() the way
+     the darwin branch does. 150 MB in memory is harmless; 1.4 GB is not —
+     undici holds the received chunks AND the concatenated ArrayBuffer, so
+     the peak is closer to 3 GB, and an "Array buffer allocation failed" on
+     an 8 GB laptop would strand exactly the user this free path exists for
+     (the one who clicked Install because they can't pay for an API key).
+     Streaming keeps the peak at one chunk. */
+  if (!res.body) throw new Error("Couldn't download Ollama (empty response)");
+  await pipeline(
+    Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]),
+    fs.createWriteStream(zip),
+  );
+
+  onLog('Unpacking the local engine…');
+  /* Windows has shipped a real `tar` (bsdtar, via libarchive) since the 1803
+     update, and bsdtar auto-detects zip content regardless of the -z/-j
+     flag — `tar xf archive.zip` extracts it exactly like `tar xzf
+     archive.tgz` does for darwin above. Absolute path for the same reason
+     as the macOS call: a double-clicked app may not resolve a bare command
+     through the user's PATH, but %SystemRoot%\\System32 always is. */
+  const tarExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  await execFileP(tarExe, ['xf', zip, '-C', dir]);
+  fs.rmSync(zip, { force: true });
+
+  const bin = path.join(dir, 'ollama.exe');
+  if (!fs.existsSync(bin)) {
+    throw new Error("The download didn't contain the expected files. Try again.");
+  }
   return bin;
 }
 

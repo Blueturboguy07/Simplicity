@@ -17,7 +17,7 @@
 
 ### First launch
 
-The first run downloads the local search engine (~150 MB, one time). If you want free local AI models, the setup screen installs [Ollama](https://ollama.com) for you with one click on macOS (Windows: install Ollama yourself from [ollama.com/download](https://ollama.com/download), then click Install again — Simplicity picks it up automatically) — or plug in an API key (OpenAI, Anthropic, Google, Groq, xAI) or connect your existing Claude subscription for free frontier-model answers.
+The first run downloads the local search engine (~150 MB on macOS, ~1.4 GB on Windows — Windows' official Ollama package bundles CUDA and Vulkan support the macOS one doesn't need). If you want free local AI models, the setup screen installs [Ollama](https://ollama.com) for you with one click, on macOS or Windows — or plug in an API key (OpenAI, Anthropic, Google, Groq, xAI) or connect your existing Claude subscription for free frontier-model answers.
 
 ### Uninstalling
 
