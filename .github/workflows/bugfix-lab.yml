@@ -1,0 +1,39 @@
+# bugfix-lab controlled-environment oracle for
+# simplicity-ollama-install-button-noop-mac-win.
+#
+# Runs on a FRESH macos-latest runner rather than a developer's own Mac on
+# purpose: a real, already-installed Ollama (common on a dev machine) makes
+# findBinary() succeed via its hardcoded absolute-path fallbacks regardless
+# of PATH, which sends a real install request at a real local daemon -- not
+# what this cluster is about, and not safe to force-fail against on shared
+# infrastructure. A GitHub-hosted runner has no such confound: it starts
+# with no Ollama at all, exactly like the reporter's machine.
+#
+# This workflow is inert unless dispatched by name on this branch -- it does
+# not run on push/PR and does not affect Simplicity's own CI.
+name: bugfix-lab
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: corepack enable
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: npx playwright install chromium
+
+      - name: Run the oracle
+        run: bash scripts/bugfix-lab/simplicity-ollama-install-button-noop-mac-win.sh
