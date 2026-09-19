@@ -5,10 +5,10 @@ import { formatMicros, PUBLIK_ACCOUNT_URL, PublikStatus } from './types';
  * card, the Settings card, the chat error block and the balance banner so
  * every surface says the same thing and cta.test.ts pins it once.
  *
- * Copy rule (CONTRACT §1): "publik API", dollars, never tokens, never
- * "credits" as a unit, never the provider's name. The free amount always
- * comes from the server (starter_micros / x-publik-starter-remaining) —
- * never a constant in this file. */
+ * Copy rule (CONTRACT §1): "publik API", dollars, never tokens, never a
+ * made-up unit, never the provider's name. The free amount always comes
+ * from the server (starter_micros / x-publik-starter-remaining) — never a
+ * constant in this file. */
 
 /* The one-sentence justification. Sentences from the site's
    lib/publik-api/why-it-costs.ts, so the argument here is the argument on
@@ -64,7 +64,7 @@ export const planCta = (
   return { label, href: claim ?? PUBLIK_ACCOUNT_URL };
 };
 
-/* The balance line, (a) in CONTRACT §12.1: "$0.25 of free starter usage"
+/* The balance line, (a) in CONTRACT §12.1: "<amount> of free starter usage"
    from the mint response, then live from the headers. */
 export const balanceLine = (
   status: Pick<

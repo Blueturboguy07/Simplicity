@@ -92,6 +92,7 @@ vi.mock('@/lib/config', async () => {
 import configManager from '@/lib/config';
 import {
   acceptDisclosure,
+  acknowledgeCta,
   declinePublik,
   ensureProvisioned,
   handleKeyRevoked,
@@ -442,6 +443,62 @@ describe('decline / reset', () => {
     expect(await ensureProvisioned({ env: env() })).toBe('consent-required');
     expect(await acceptDisclosure({ env: env() })).toBe('active');
     expect(received).toHaveLength(2);
+  });
+});
+
+describe('the plan CTA (CONTRACT §12)', () => {
+  it('the mint seeds the balance line from the response: starter and claim_url, never a constant', async () => {
+    respond = () => ({
+      status: 201,
+      body: okBody({ starter_micros: 500000, balance_micros: 500000 }),
+    });
+    await acceptDisclosure({ env: env() });
+    const snap = publikBalance.peek();
+    expect(snap.starterRemainingMicros).toBe(500000);
+    expect(snap.balanceMicros).toBe(500000);
+    expect(snap.claimUrl).toBe('https://publikhq.com/claim/HK7F-2QWD');
+    expect(snap.claimState).toBe('anonymous');
+    expect(state().starterMicros).toBe(500000);
+    expect(state().claimUrl).toBe('https://publikhq.com/claim/HK7F-2QWD');
+  });
+
+  it('"Later" keeps the key and the free starter; only ctaSeenAt is recorded', async () => {
+    await acceptDisclosure({ env: env() });
+    const before = JSON.stringify(publikEntry());
+    const balanceBefore = publikBalance.peek().balanceMicros;
+
+    acknowledgeCta({ now: () => new Date('2026-09-19T12:00:00Z') });
+
+    expect(JSON.stringify(publikEntry())).toBe(before);
+    expect(publikEntry().config.apiKey).toBe(KEY);
+    expect(state().state).toBe('active');
+    expect(state().ctaSeenAt).toBe('2026-09-19T12:00:00.000Z');
+    expect(publikBalance.peek().balanceMicros).toBe(balanceBefore);
+    /* and nothing was sent — no second mint, no claim on the user's behalf */
+    expect(received).toHaveLength(1);
+    expect(await ensureProvisioned({ env: env() })).toBe('active');
+    expect(received).toHaveLength(1);
+  });
+
+  it('"Later" before any state exists is a no-op', () => {
+    acknowledgeCta();
+    expect(state()).toBeUndefined();
+  });
+
+  it('a 402 is noted for the banner and cleared by the next metered response', async () => {
+    await acceptDisclosure({ env: env() });
+    publikBalance.noteCreditError(
+      'Not enough publik credit for this request.',
+      'https://publikhq.com/claim/HK7F-2QWD',
+    );
+    expect(publikBalance.peek().creditError).toEqual({
+      message: 'Not enough publik credit for this request.',
+      topUpUrl: 'https://publikhq.com/claim/HK7F-2QWD',
+    });
+    publikBalance.observe(
+      new Headers({ 'x-publik-balance': '1000', 'x-publik-claim-state': 'anonymous' }),
+    );
+    expect(publikBalance.peek().creditError).toBeNull();
   });
 });
 
