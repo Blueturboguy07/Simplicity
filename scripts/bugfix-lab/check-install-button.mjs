@@ -34,13 +34,19 @@ const result = {
     await page.waitForSelector('text=Choose a provider', { timeout: timeoutMs });
     result.reachedProviderScreen = true;
 
-    // The Ollama row, located by its blurb text (stable regardless of the
-    // button's own state) and walked up to the row's own container so the
+    // The Ollama row, located by the provider's name (exact match, stable
+    // across every commit this oracle has ever run against -- the row's
+    // *blurb* text changed as part of the very fix this oracle looks for,
+    // so anchoring on that would silently pass on the pre-fix commit for
+    // the wrong reason) and walked up to the row's own container so the
     // button can be re-found after its accessible name changes (it becomes
     // an unlabeled spinner icon while loading -- a name-based locator would
     // stop matching anything the instant the click lands).
+    // Exact match, not `hasText` substring: the onboarding "What's an API
+    // key?" explainer box also mentions "Ollama" in a sentence, and this
+    // provider-name <p> contains nothing but the bare word.
     const ollamaRow = page
-      .locator('p', { hasText: 'Free — runs on your computer' })
+      .getByText('Ollama', { exact: true })
       .locator('xpath=ancestor::div[contains(@class,"rounded-xl")][1]');
     await ollamaRow.waitFor({ state: 'visible', timeout: timeoutMs });
     const installButton = ollamaRow.locator('button').first();
