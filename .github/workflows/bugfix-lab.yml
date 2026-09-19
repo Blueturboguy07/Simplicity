@@ -1,20 +1,26 @@
 # bugfix-lab controlled-environment oracle for
 # simplicity-ollama-install-button-noop-mac-win.
 #
-# Runs on a FRESH macos-latest runner rather than a developer's own Mac on
-# purpose: a real, already-installed Ollama (common on a dev machine) makes
-# findBinary() succeed via its hardcoded absolute-path fallbacks regardless
-# of PATH, which sends a real install request at a real local daemon -- not
-# what this cluster is about, and not safe to force-fail against on shared
-# infrastructure. A GitHub-hosted runner has no such confound: it starts
-# with no Ollama at all, exactly like the reporter's machine.
+# Triggered on `push` (not `workflow_dispatch`): a brand-new workflow_dispatch
+# workflow only becomes dispatchable via the API/CLI once it exists on the
+# repo's DEFAULT branch, which this lab branch is not and should not become.
+# `push` has no such registration requirement -- GitHub runs whatever
+# .github/workflows/*.yml a push's own ref contains, so this fires the moment
+# this branch is pushed, entirely self-contained to this branch, and edits no
+# file any other branch or cluster depends on.
 #
-# This workflow is inert unless dispatched by name on this branch -- it does
-# not run on push/PR and does not affect Simplicity's own CI.
+# Runs on a FRESH macos-latest runner on purpose: a real, already-installed
+# Ollama (as on a developer's own Mac) makes findBinary() succeed via its
+# hardcoded absolute-path fallbacks regardless of PATH, which sends a real
+# install request at a real local daemon -- not what this cluster is about,
+# and not safe to force-fail against on shared infrastructure. A GitHub-hosted
+# runner starts with no Ollama at all, exactly like the reporter's machine.
 name: bugfix-lab
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - fix/simplicity-ollama-install-button-noop-mac-win
 
 permissions:
   contents: read
