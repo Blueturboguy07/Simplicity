@@ -99,13 +99,13 @@ console.log("ollamaBinaryOnDisk=" + (binFound || "<none>"), "daemonServing=" + s
 const installed = Boolean(binFound) || serving || r.connectedAfter;
 const visibleError = Boolean((r.bannerText && String(r.bannerText).trim()) || (r.toastText && String(r.toastText).trim()));
 console.log("visibleError=" + visibleError);
-// Cluster record's own stated pass/fail rule (clusters.json "oracle" field): reproduces iff
+// Cluster records own stated pass/fail rule (clusters.json "oracle" field): reproduces iff
 // (no install AND no visible toast/banner); does NOT reproduce if either the install proceeds
 // OR a visible error surfaces. Applying that compound rule verbatim, not just install success.
 if (installed || visibleError) {
-  console.log("BUG ABSENT per the cluster's own stated rule: install succeeded, or a visible toast/banner rendered (not a silent no-op).");
+  console.log("BUG ABSENT per the cluster records own stated rule: install succeeded, or a visible toast/banner rendered (not a silent no-op).");
   console.log("BUGFIX_LAB_RESULT=BUGFIX_LAB_ABSENT"); process.exit(0);
 }
-console.log("BUG PRESENT per the cluster's own stated rule: after " + r.clicks + " clicks on Install, no ollama binary exists anywhere findBinary() looks, nothing is serving on 11434, the row is not Connected, AND no visible toast/banner rendered -- a genuine silent no-op.");
+console.log("BUG PRESENT per the cluster records own stated rule: after " + r.clicks + " clicks on Install, no ollama binary exists anywhere findBinary() looks, nothing is serving on 11434, the row is not Connected, AND no visible toast/banner rendered -- a genuine silent no-op.");
 console.log("BUGFIX_LAB_RESULT=BUGFIX_LAB_PRESENT"); process.exit(1);
 ' "$LOG_JSON"
