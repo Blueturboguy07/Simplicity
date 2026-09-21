@@ -1,0 +1,42 @@
+# bugfix-lab controlled environment for
+# simplicity-ollama-install-button-noop-mac-win -- WINDOWS, REAL install path.
+#
+# Different angle from the earlier macOS run in this cluster: that one forced
+# an artificial failure (bin/ pre-created as a file -> EEXIST) to ask whether a
+# failed install is now *visible*. This one forces nothing at all. It runs the
+# real install path a Windows reader gets and asks the reporter's actual
+# question -- after clicking Install (three times, as they did), is Ollama
+# installed? -- by looking at the filesystem and the port, not at the DOM.
+#
+# `push`-triggered, not workflow_dispatch: a workflow_dispatch workflow only
+# becomes dispatchable once the file exists on the repo's DEFAULT branch, which
+# a lab-only harness must not become. The branch glob keeps this self-contained
+# to this cluster's own lab branches.
+name: bugfix-lab-win
+
+on:
+  push:
+    branches:
+      - 'fix/simplicity-ollama-install-button-noop-mac-win-winreal*'
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+        shell: bash
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+        shell: bash
+      - run: npx playwright install chromium
+        shell: bash
+      - name: Run the oracle
+        shell: bash
+        run: bash scripts/bugfix-lab/win-ollama-install.sh
