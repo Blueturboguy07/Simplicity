@@ -12,6 +12,18 @@
 #
 # The exe is uploaded as a workflow artifact; the release is assembled locally
 # so the mac DMG and Windows exe land in one publish with no broken-link gap.
+#
+# ── bugfix-lab scaffolding (branch fix/simplicity-free-tier-api-key-confusion-mac-win only) ──
+# The `bugfix-lab-repro` job at the bottom of this file, and the `if:` guard on
+# `build`, exist only so this cluster's oracle has a dispatch vehicle: GitHub
+# starts a `workflow_dispatch` run only for a workflow FILE THAT EXISTS ON THE
+# DEFAULT BRANCH, so `gh workflow run bugfix-lab.yml --ref <branch>` answers
+# "HTTP 404: workflow bugfix-lab.yml not found on the default branch", and
+# adding a lab workflow to `desktop` is not this pipeline's to do. Everything
+# else in this file is byte-for-byte `desktop`'s, and both additions are gated
+# on this exact branch name, so merging changes nothing about how the installer
+# is built on `desktop`, on a tag, or on any other ref. Drop the two
+# chore(bugfix-lab) commits before merge and the file is identical again.
 name: windows-installer
 
 on:
@@ -22,6 +34,10 @@ permissions:
 
 jobs:
   build:
+    # bugfix-lab scaffolding: skip ONLY on the lab branch, so the oracle's
+    # dispatches don't also build a release installer. Every other ref --
+    # `desktop`, a tag, a real fix branch -- is unaffected.
+    if: ${{ github.ref_name != 'fix/simplicity-free-tier-api-key-confusion-mac-win' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,3 +105,31 @@ jobs:
           name: Simplicity-Setup-Windows
           path: release/Simplicity-Setup-Windows.exe
           if-no-files-found: error
+
+  # bugfix-lab scaffolding -- never runs on any ref but the lab branch below.
+  # Substance is identical to .github/workflows/bugfix-lab.yml in this commit,
+  # which is the canonical copy (and is undispatchable by name, hence this).
+  bugfix-lab-repro:
+    if: ${{ github.ref_name == 'fix/simplicity-free-tier-api-key-confusion-mac-win' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Repro -- simplicity-free-tier-api-key-confusion-mac-win
+        shell: pwsh
+        run: ./scripts/bugfix-lab/simplicity-free-tier-api-key-confusion-mac-win.ps1
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bugfix-lab-evidence
+          path: |
+            install-stream.ndjson
+            dev.log
+          if-no-files-found: warn
