@@ -1,15 +1,26 @@
 <#
  bugfix-lab oracle body for simplicity-windows-server-not-responding.
 
- Population: direct-download. Reproduces exactly what report gh-simplicity-8
- describes: install the published Windows release, launch it, and watch the
- shell's own log file (written by desktop/main.mjs's log()) for either the
- startup failure or a successful load.
+ Population: direct-download. Reproduces report gh-simplicity-8: install the
+ published Windows release, launch it, and watch the shell's own log file
+ (written by desktop/main.mjs's log()) for either the startup failure or a
+ successful load.
 
- Accepts one optional argument: the release tag to install (defaults to
- v0.1.3, the tag the report's population actually ran -- also usable to
- install an OLDER tag for a negative control, or built straight from a
- locally-built installer path via -LocalExe).
+ IMPORTANT: the reporter's log (issue body, verbatim) has NO SearXNG
+ first-time-setup lines -- it starts directly at "Starting Simplicity...".
+ A truly first launch on a fresh machine always prints those setup lines
+ first (confirmed in run 1 of this oracle, 2026-09-23: ~48s of SearXNG
+ download/unpack before "Starting Simplicity..." ever appears). So the
+ reporter's failure happened on a launch where SearXNG was already
+ provisioned, i.e. NOT the very first launch. To match that, this script
+ launches the app TWICE: the first launch absorbs the one-time SearXNG setup
+ (not scored), then the app is closed and relaunched, and only the SECOND
+ launch's log segment (everything after the last "Starting Simplicity" line)
+ is scored against the failure text.
+
+ Accepts an optional release tag (defaults to v0.1.3, the tag report
+ gh-simplicity-8's population actually ran -- also usable to install an
+ OLDER tag for a negative control) or a local exe path.
 #>
 param(
   [string]$Tag = "v0.1.3",
@@ -23,9 +34,26 @@ function Write-Marker($state, $reason) {
   Write-Host "BUGFIX_LAB_$state`: $reason"
 }
 
+function Get-LastLaunchSegment($path) {
+  if (-not (Test-Path $path)) { return $null }
+  $content = Get-Content -Path $path -Raw -ErrorAction SilentlyContinue
+  if (-not $content) { return $null }
+  $idx = $content.LastIndexOf('Starting Simplicity')
+  if ($idx -lt 0) { return $null }
+  return $content.Substring($idx)
+}
+
+function Find-LogPath($searchRoots) {
+  foreach ($root in $searchRoots) {
+    $candidate = Join-Path $root 'logs\simplicity.log'
+    if (Test-Path $candidate) { return $candidate }
+  }
+  $found = Get-ChildItem -Path $env:APPDATA -Filter 'simplicity.log' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($found) { return $found.FullName }
+  return $null
+}
+
 $installDir = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity'
-# Fresh runner normally has nothing here, but be defensive if this script is
-# ever re-run against a runner that already has an install.
 if (Test-Path $installDir) {
   $existingUn = Join-Path $installDir 'Uninstall Simplicity.exe'
   if (Test-Path $existingUn) {
@@ -54,96 +82,99 @@ $exe = Join-Path $installDir 'Simplicity.exe'
 if (!(Test-Path $exe)) { throw "Simplicity.exe missing after install -- installer itself is broken, not this cluster" }
 Write-Host "Installed: $exe"
 
-# desktop/main.mjs writes <userData>/logs/simplicity.log. userData is
-# Electron's app.getPath('userData'), which this build has never been
-# observed to be anywhere but %APPDATA%\Simplicity in this campaign -- but
-# rather than hardcode it, find it after launch so a wrong guess can't
-# masquerade as ABSENT.
 $searchRoots = @(
   (Join-Path $env:APPDATA 'Simplicity'),
   (Join-Path $env:APPDATA 'vane')
 )
 
-Write-Host "Launching Simplicity.exe (detached) ..."
-$proc = Start-Process -FilePath $exe -PassThru
-Write-Host "PID: $($proc.Id)"
+# ---- Launch 1: absorb the one-time SearXNG setup, not scored ----
+Write-Host "=== Launch 1 (absorbs first-run SearXNG setup) ==="
+$proc1 = Start-Process -FilePath $exe -PassThru
+Write-Host "PID: $($proc1.Id)"
 
 $logPath = $null
-$deadline = (Get-Date).AddSeconds(150)
+$deadline1 = (Get-Date).AddSeconds(150)
+while ((Get-Date) -lt $deadline1) {
+  if (-not $logPath) { $logPath = Find-LogPath $searchRoots }
+  if ($logPath) {
+    $seg = Get-LastLaunchSegment $logPath
+    if ($seg -and ($seg -match "server started but isn't responding" -or $seg -match 'Ready in')) { break }
+  }
+  if ($proc1.HasExited) { Write-Host "Launch 1 process exited early with code $($proc1.ExitCode)"; break }
+  Start-Sleep -Seconds 3
+}
+
+if ($logPath) {
+  Write-Host "--- launch 1 segment so far ---"
+  Get-LastLaunchSegment $logPath | Write-Host
+  Write-Host "--- end launch 1 segment ---"
+} else {
+  Write-Host "No simplicity.log found yet after launch 1 (searched $($searchRoots -join ', ') and recursive $env:APPDATA)"
+}
+
+Write-Host "Closing launch 1..."
+if (-not $proc1.HasExited) {
+  try { $proc1.CloseMainWindow() | Out-Null } catch {}
+  $closedDeadline = (Get-Date).AddSeconds(20)
+  while ((Get-Date) -lt $closedDeadline -and -not $proc1.HasExited) { Start-Sleep -Seconds 2 }
+  if (-not $proc1.HasExited) {
+    Write-Host "Graceful close did not exit in time -- force killing"
+    try { Stop-Process -Id $proc1.Id -Force -ErrorAction SilentlyContinue } catch {}
+  }
+}
+Start-Sleep -Seconds 5
+
+# ---- Launch 2: this is what the oracle scores (matches the reporter's log shape) ----
+Write-Host "=== Launch 2 (scored) ==="
+$proc2 = Start-Process -FilePath $exe -PassThru
+Write-Host "PID: $($proc2.Id)"
+
+$deadline2 = (Get-Date).AddSeconds(150)
 $sawFailure = $false
 $sawSuccess = $false
 $failureLine = ""
 
-while ((Get-Date) -lt $deadline) {
-  if (-not $logPath) {
-    foreach ($root in $searchRoots) {
-      $candidate = Join-Path $root 'logs\simplicity.log'
-      if (Test-Path $candidate) { $logPath = $candidate; break }
-    }
-    if (-not $logPath) {
-      # Fall back to a recursive search in case userData resolved somewhere
-      # else entirely (e.g. a different app-name casing).
-      $found = Get-ChildItem -Path $env:APPDATA -Filter 'simplicity.log' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-      if ($found) { $logPath = $found.FullName }
-    }
-  }
-
-  if ($logPath -and (Test-Path $logPath)) {
-    $content = Get-Content -Path $logPath -Raw -ErrorAction SilentlyContinue
-    if ($content -match "server started but isn't responding") {
+while ((Get-Date) -lt $deadline2) {
+  if (-not $logPath) { $logPath = Find-LogPath $searchRoots }
+  if ($logPath) {
+    $seg = Get-LastLaunchSegment $logPath
+    if ($seg -match "server started but isn't responding") {
       $sawFailure = $true
-      $failureLine = ($content -split "`n" | Select-String -SimpleMatch "server started but isn't responding" | Select-Object -First 1).ToString()
+      $failureLine = ($seg -split "`n" | Select-String -SimpleMatch "server started but isn't responding" | Select-Object -First 1).ToString()
       break
     }
-    if ($content -match 'Starting Simplicity') {
-      # Keep polling -- "Starting" alone isn't success, we need the window to
-      # actually load, which we approximate by the ABSENCE of the failure
-      # line once the process has run past the 60s internal timeout AND the
-      # process is still alive with a visible window (best-effort on a
-      # headless runner: presence of the process + no failure line logged
-      # after the internal 60s deadline has clearly elapsed).
-    }
   }
-
-  if ($proc.HasExited) {
-    Write-Host "Process exited early with code $($proc.ExitCode)"
-    break
-  }
-
+  if ($proc2.HasExited) { Write-Host "Launch 2 process exited early with code $($proc2.ExitCode)"; break }
   Start-Sleep -Seconds 3
 }
 
-if (-not $sawFailure -and $logPath -and (Test-Path $logPath)) {
-  $finalContent = Get-Content -Path $logPath -Raw -ErrorAction SilentlyContinue
-  if ($finalContent -match "server started but isn't responding") {
+$finalSeg = if ($logPath) { Get-LastLaunchSegment $logPath } else { $null }
+if (-not $sawFailure -and $finalSeg) {
+  if ($finalSeg -match "server started but isn't responding") {
     $sawFailure = $true
-    $failureLine = ($finalContent -split "`n" | Select-String -SimpleMatch "server started but isn't responding" | Select-Object -First 1).ToString()
-  } elseif ($finalContent -match 'Ready in') {
-    # Next reported ready and the failure line never appeared within the
-    # observation window -- treat as success. Note: main.mjs's own timeout
-    # is 60s; we wait up to 150s total before concluding ABSENT so a slow
-    # (but eventually successful) CI runner isn't mistaken for the bug.
+    $failureLine = ($finalSeg -split "`n" | Select-String -SimpleMatch "server started but isn't responding" | Select-Object -First 1).ToString()
+  } elseif ($finalSeg -match 'Ready in') {
     $sawSuccess = $true
   }
 }
 
 if ($logPath) {
-  Write-Host "=== $logPath ==="
-  Get-Content -Path $logPath -ErrorAction SilentlyContinue | Write-Host
+  Write-Host "=== $logPath (launch 2 segment) ==="
+  Write-Host $finalSeg
   Write-Host "=== end log ==="
 } else {
   Write-Host "No simplicity.log was ever found under $($searchRoots -join ', ') or via recursive search of $env:APPDATA"
 }
 
-try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+try { Stop-Process -Id $proc2.Id -Force -ErrorAction SilentlyContinue } catch {}
 
 if ($sawFailure) {
-  Write-Marker "PRESENT" "log shows: $failureLine"
+  Write-Marker "PRESENT" "launch 2 log shows: $failureLine"
   exit 1
 } elseif ($sawSuccess) {
-  Write-Marker "ABSENT" "log shows Ready with no server-started-but-not-responding failure within the 150s observation window"
+  Write-Marker "ABSENT" "launch 2 log shows Ready with no server-started-but-not-responding failure within the 150s observation window"
   exit 0
 } else {
-  Write-Marker "ABSENT" "could not confirm PRESENT: no failure line found (log path: $logPath); treating as inconclusive-toward-absent, see stdout above"
+  Write-Marker "ABSENT" "could not confirm PRESENT on launch 2: no failure line found (log path: $logPath); treating as inconclusive-toward-absent, see stdout above"
   exit 2
 }
