@@ -21,10 +21,22 @@
  Accepts an optional release tag (defaults to v0.1.3, the tag report
  gh-simplicity-8's population actually ran -- also usable to install an
  OLDER tag for a negative control) or a local exe path.
+
+ -StressCpu (default on): the first REPRODUCE attempt found the server
+ answering isServing() well within the 60s internal timeout on a clean,
+ idle windows-latest runner (both launches), and flagged "CPU/disk
+ contention on the reporter's machine" as an unconfirmed hypothesis for why
+ a single real user hit the 60s cliff and CI does not. This flag tests that
+ hypothesis directly: it saturates every logical processor with background
+ PowerShell jobs (tight busy-loops) for the duration of launch 2 only, to
+ model a loaded end-user machine (AV scan, other apps, background updates)
+ without touching the app itself. If the failure still never appears under
+ real CPU starvation, that is much stronger evidence toward not_reproduced.
 #>
 param(
   [string]$Tag = "v0.1.3",
-  [string]$LocalExe = ""
+  [string]$LocalExe = "",
+  [bool]$StressCpu = $true
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,6 +137,22 @@ if (-not $proc1.HasExited) {
 Start-Sleep -Seconds 5
 
 # ---- Launch 2: this is what the oracle scores (matches the reporter's log shape) ----
+$stressJobs = @()
+if ($StressCpu) {
+  $cpuCount = [Environment]::ProcessorCount
+  Write-Host "=== Starting CPU stress: $cpuCount background busy-loop job(s) (ProcessorCount=$cpuCount) ==="
+  for ($i = 0; $i -lt $cpuCount; $i++) {
+    $stressJobs += Start-Job -ScriptBlock {
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
+      $x = 0.0
+      # Runs until the parent stops the job (below); busy-loop pegs one core.
+      while ($true) { $x = [Math]::Sqrt($x + 1.0) }
+    }
+  }
+  Start-Sleep -Seconds 2
+  Write-Host "Stress jobs running: $($stressJobs.Count)"
+}
+
 Write-Host "=== Launch 2 (scored) ==="
 $proc2 = Start-Process -FilePath $exe -PassThru
 Write-Host "PID: $($proc2.Id)"
@@ -167,6 +195,11 @@ if ($logPath) {
 }
 
 try { Stop-Process -Id $proc2.Id -Force -ErrorAction SilentlyContinue } catch {}
+
+if ($stressJobs.Count -gt 0) {
+  Write-Host "=== Stopping CPU stress jobs ==="
+  $stressJobs | Stop-Job -PassThru | Remove-Job -Force
+}
 
 if ($sawFailure) {
   Write-Marker "PRESENT" "launch 2 log shows: $failureLine"
