@@ -1,0 +1,48 @@
+# bugfix-lab controlled-environment oracle for
+# simplicity-windows-server-not-responding.
+#
+# Triggered on `push` (not `workflow_dispatch`): a brand-new workflow_dispatch
+# workflow only becomes dispatchable via the API/CLI once it exists on the
+# repo's DEFAULT branch, which this lab branch is not and should not become.
+# `push` has no such registration requirement -- GitHub runs whatever
+# .github/workflows/*.yml a push's own ref contains, so this fires the moment
+# this branch is pushed, entirely self-contained to this branch.
+#
+# This is a direct-download population bug (report gh-simplicity-8), so the
+# oracle installs the PUBLISHED release asset (Simplicity-Setup-Windows.exe,
+# tag given by RELEASE_TAG) rather than building from source -- that's
+# exactly what the reporter ran. Runs on a fresh windows-latest runner, which
+# has none of the app's prerequisites pre-installed, matching a real user's
+# machine.
+name: bugfix-lab
+
+on:
+  push:
+    branches:
+      - fix/simplicity-windows-server-not-responding
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to install (defaults to v0.1.3, the tag report gh-simplicity-8 ran)'
+        required: false
+        default: 'v0.1.3'
+      local_exe_artifact:
+        description: 'Unused placeholder (kept for parity with other clusters)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the oracle
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.release_tag }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "v0.1.3" }
+          pwsh -File scripts/bugfix-lab/simplicity-windows-server-not-responding.ps1 -Tag $tag
