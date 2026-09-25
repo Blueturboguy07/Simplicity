@@ -25,6 +25,7 @@ const brands: Record<string, { icon?: IconType; letters?: string }> = {
   xai: { letters: 'X' },
   /* No vendor mark, no invented logo — same lettermark fallback as groq. */
   publik: { letters: 'pk' },
+  openaicompatible: { letters: 'OC' },
 };
 
 const ProviderLogo = ({

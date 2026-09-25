@@ -52,6 +52,11 @@ const providerInfo: Record<string, { free: boolean; blurb: string }> = {
     blurb:
       "Priced per use at 50% of the model's published list price, from your publik balance.",
   },
+  openaicompatible: {
+    free: false,
+    blurb:
+      'Any OpenAI-compatible API — OpenRouter, Together, LM Studio, local servers and more.',
+  },
 };
 
 /* Where to actually go get a key, for the providers that need one. Opened in
@@ -90,6 +95,7 @@ const ProviderRow = ({
   setProviders: React.Dispatch<React.SetStateAction<ConfigModelProvider[]>>;
 }) => {
   const [key, setKey] = useState('');
+  const [baseURL, setBaseURL] = useState('');
   const [loading, setLoading] = useState(false);
   const [tier, setTier] = useState('balanced');
   const [progress, setProgress] = useState<string | null>(null);
@@ -194,12 +200,24 @@ const ProviderRow = ({
 
   const connect = async () => {
     if (field?.required && !key.trim()) return;
+    /* OpenAI Compatible has no sensibly shared default endpoint, so the base
+       URL is always user-provided — never auto-filled from a placeholder. */
+    if (provider.key === 'openaicompatible' && !baseURL.trim()) return;
     setLoading(true);
     try {
-      const added = await register(provider.key, provider.name, {
-        ...autoConfig(provider.fields as UIConfigField[]),
-        ...(field ? { [field.key]: key.trim() } : {}),
-      });
+      const added = await register(
+        provider.key,
+        provider.name,
+        provider.key === 'openaicompatible'
+          ? {
+              baseURL: baseURL.trim(),
+              ...(key.trim() ? { apiKey: key.trim() } : {}),
+            }
+          : {
+              ...autoConfig(provider.fields as UIConfigField[]),
+              ...(field ? { [field.key]: key.trim() } : {}),
+            },
+      );
       setProviders((prev) => [...prev, added]);
       setKey('');
       toast.success(`${provider.name} connected.`);
@@ -327,6 +345,16 @@ const ProviderRow = ({
         ) : (
           <div className="flex shrink-0 flex-col items-end gap-1">
             <div className="flex flex-row items-center gap-2">
+              {provider.key === 'openaicompatible' && (
+                <input
+                  value={baseURL}
+                  onChange={(e) => setBaseURL(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && connect()}
+                  type="text"
+                  placeholder="Base URL · e.g. api.openrouter.ai/v1"
+                  className="w-52 sm:w-64 rounded-lg border border-light-200 dark:border-dark-200 bg-light-primary dark:bg-dark-primary px-3 py-1.5 text-xs text-black/80 dark:text-white/80 placeholder:text-black/40 dark:placeholder:text-white/40 focus-visible:outline-none focus-visible:border-light-300 dark:focus-visible:border-dark-300 transition-colors"
+                />
+              )}
               {field && (
                 <input
                   value={key}
@@ -340,7 +368,12 @@ const ProviderRow = ({
               <button
                 type="button"
                 onClick={connect}
-                disabled={loading || (field?.required && !key.trim())}
+                disabled={
+                  loading ||
+                  (provider.key === 'openaicompatible'
+                    ? !baseURL.trim()
+                    : field?.required && !key.trim())
+                }
                 className="rounded-lg bg-[#24A0ED] px-3 py-1.5 text-xs font-medium text-white transition duration-200 hover:bg-[#1e8fd1] active:scale-95 disabled:bg-light-200 dark:disabled:bg-dark-200 disabled:text-black/40 dark:disabled:text-white/40 disabled:active:scale-100"
               >
                 {loading ? (

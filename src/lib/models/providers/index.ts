@@ -10,6 +10,7 @@ import AnthropicProvider from './anthropic';
 import ClaudeCodeProvider from './claudecode';
 import XAIProvider from './xai';
 import PublikProvider from './publik';
+import OpenAICompatibleProvider from './openaicompatible';
 
 export const providers: Record<string, ProviderConstructor<any>> = {
   /* First so it sorts first wherever Object.entries(providers) is iterated —
@@ -24,6 +25,7 @@ export const providers: Record<string, ProviderConstructor<any>> = {
   anthropic: AnthropicProvider,
   claudecode: ClaudeCodeProvider,
   xai: XAIProvider,
+  openaicompatible: OpenAICompatibleProvider,
 };
 
 export const getModelProvidersUIConfigSection =

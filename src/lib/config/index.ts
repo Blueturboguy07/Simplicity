@@ -134,7 +134,28 @@ class ConfigManager {
   private saveConfig() {
     const tmpPath = `${this.configPath}.${process.pid}.${Date.now()}.tmp`;
     fs.writeFileSync(tmpPath, JSON.stringify(this.currentConfig, null, 2));
-    fs.renameSync(tmpPath, this.configPath);
+    this.renameIntoPlace(tmpPath, this.configPath);
+  }
+
+  /* Windows refuses to rename over a destination another process has open
+     (concurrent build workers read the file, antivirus holds it briefly),
+     which surfaces as EPERM during `next build` — retry briefly before
+     giving up. */
+  private renameIntoPlace(tmpPath: string, destPath: string) {
+    const attempts = 5;
+
+    for (let i = 0; i < attempts; i++) {
+      try {
+        fs.renameSync(tmpPath, destPath);
+        return;
+      } catch (err: any) {
+        if (err?.code !== 'EPERM' && err?.code !== 'EBUSY') throw err;
+        if (i === attempts - 1) throw err;
+        /* Synchronous backoff (build workers don't await) — doubles each
+           attempt: 50ms, 100ms, 200ms, 400ms. */
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * 2 ** i);
+      }
+    }
   }
 
   private initializeConfig() {
