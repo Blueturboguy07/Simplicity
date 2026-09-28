@@ -16,8 +16,9 @@ import { getPublikStatus } from '@/lib/publik/status';
      retry:     after an offline / rate-limited mint; same install id
      reconnect: after a decline or a disconnect; fresh install id, the
                 disclosure shows again before anything is sent
-     later:     the plan CTA's "Later" — keeps the key and the free
-                starter, only records that the card was shown (§12.4) */
+     later:     the plan CTA's "Later" — keeps the key and leaves the
+                balance exactly as minted, only records that the card was
+                shown (§12.4) */
 export const GET = async () => {
   return Response.json(await getPublikStatus());
 };

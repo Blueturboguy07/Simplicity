@@ -25,7 +25,8 @@ import { BalanceLine, PlanCtaLink, WhyItCosts } from '@/components/Publik/PlanCt
  *
  * Copy rules (CONTRACT §1): "publik API" only; the rate and the R21
  * "most people spend under $2 a month" line, no hourly figure; dollars,
- * never tokens; the free balance comes from the server, never a constant.
+ * never tokens; the balance comes from the server, never a constant (the
+ * disclosure's once-per-account $0.05 on link is policy copy, not a balance).
  */
 
 /* Shown to every install once, before anything is sent. */
