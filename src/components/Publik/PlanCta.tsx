@@ -11,7 +11,9 @@ import {
 import type { PublikStatus } from '@/lib/publik/types';
 
 /* The three pieces CONTRACT §12.1 puts on every publik card, in order:
- *   (a) BalanceLine   — "<amount> of free starter usage", from the server
+ *   (a) BalanceLine   — the amount from the server; an unlinked zero
+ *                       balance says to link this computer, never "free
+ *                       starter usage" (cta.ts balanceLine)
  *   (b) WhyItCosts    — the one-sentence justification (open on first run,
  *                       a "Why it costs money" toggle everywhere else)
  *   (c) PlanCtaLink   — the primary button; a real link so the URL is the

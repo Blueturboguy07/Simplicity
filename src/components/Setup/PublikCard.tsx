@@ -18,13 +18,15 @@ import { BalanceLine, PlanCtaLink, WhyItCosts } from '@/components/Publik/PlanCt
  *                  (a) the balance line from the response, (b) the
  *                  one-sentence justification, (c) the primary "Link this
  *                  computer & pick a plan" opening claim_url, with "Later"
- *                  keeping the free starter. Never a silent starter (§12.4).
+ *                  leaving the balance exactly as the mint left it. Never a
+ *                  silent starter (§12.4).
  *   failed /     — unreachable, or this computer was removed from the
  *   disconnected   account; Retry / Reconnect, and always "use my own key"
  *
  * Copy rules (CONTRACT §1): "publik API" only; the rate and the R21
  * "most people spend under $2 a month" line, no hourly figure; dollars,
- * never tokens; the free balance comes from the server, never a constant.
+ * never tokens; the balance comes from the server, never a constant (the
+ * disclosure's once-per-account $0.05 on link is policy copy, not a balance).
  */
 
 /* Shown to every install once, before anything is sent. */
@@ -36,7 +38,7 @@ export const Disclosure = ({ compact = false }: { compact?: boolean }) => (
         <span className="font-medium text-black/80 dark:text-white/80">
           publik API
         </span>
-        , so you can start right away without an account or a key.
+        , so you don&apos;t need your own key.
       </p>
     )}
     <p>
@@ -44,9 +46,10 @@ export const Disclosure = ({ compact = false }: { compact?: boolean }) => (
         Cost.
       </span>{' '}
       Every request is priced per use at 50% of the model&apos;s published list
-      price, from your publik balance. You start with a small free balance. Most
-      people spend under $2 a month. You can see every charge under each answer
-      and at publikhq.com.
+      price, from your publik balance. Your balance starts at $0.00; linking
+      your publik account gives you $0.05 of free use, once. Most
+      people spend under $2 a month. You can see every charge under each
+      answer and at publikhq.com.
     </p>
     <p>
       <span className="font-medium text-black/80 dark:text-white/80">

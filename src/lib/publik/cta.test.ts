@@ -17,6 +17,10 @@ import { PUBLIK_ACCOUNT_URL, PublikStatus } from './types';
    card, the Settings card, the chat error block and the banner cannot
    drift from each other. */
 
+/* An install mints at $0.00 (publik policy, founder 2026-09-28); the
+   default fixture below is that honest zero-balance, unlinked install.
+   Tests that need a nonzero starter or grant override those fields
+   explicitly, as a claimed account's once-per-account $0.05 would. */
 const status = (over: Partial<PublikStatus> = {}): PublikStatus => ({
   available: true,
   state: 'active',
@@ -28,9 +32,9 @@ const status = (over: Partial<PublikStatus> = {}): PublikStatus => ({
   addCreditUrl: 'https://publikhq.com/dashboard/api/add',
   topUpUrl: 'https://publikhq.com/claim/HK7F-2QWD',
   claimState: 'anonymous',
-  balanceMicros: 250000,
-  starterRemainingMicros: 250000,
-  starterGrantMicros: 250000,
+  balanceMicros: 0,
+  starterRemainingMicros: 0,
+  starterGrantMicros: 0,
   creditError: null,
   ctaSeen: false,
   week: { usedMicros: null, budgetMicros: null, resetsAt: null },
@@ -109,8 +113,10 @@ describe('planCta — the primary button', () => {
 });
 
 describe('balanceLine — (a) from the response, never a constant', () => {
-  it('anonymous: "$0.25 of free starter usage" from starter_micros', () => {
-    expect(balanceLine(status())).toBe('$0.25 of free starter usage');
+  it('anonymous, unlinked: the honest $0.00 line, never "$0.00 of free starter usage"', () => {
+    expect(balanceLine(status())).toBe(
+      '$0.00 · link this computer for free use',
+    );
   });
 
   it('follows whatever the server granted', () => {
@@ -126,8 +132,8 @@ describe('balanceLine — (a) from the response, never a constant', () => {
 
   it('falls back to balance_micros before any header has been seen', () => {
     expect(
-      balanceLine(status({ starterRemainingMicros: null, balanceMicros: 250000 })),
-    ).toBe('$0.25 of free starter usage');
+      balanceLine(status({ starterRemainingMicros: null, balanceMicros: 40000 })),
+    ).toBe('$0.04 of free starter usage');
   });
 
   it('claimed: the available balance', () => {
@@ -162,20 +168,34 @@ describe('topUpCta — exactly one link on a money message', () => {
 });
 
 describe('bannerFor — non-blocking, response-driven', () => {
-  it('nothing while the starter is healthy', () => {
+  it('nothing while the starter is healthy (and never for a fresh $0.00 mint)', () => {
     expect(bannerFor(status())).toBeNull();
-    expect(bannerFor(status({ starterRemainingMicros: 50000 }))).toBeNull();
+    expect(
+      bannerFor(
+        status({
+          claimState: 'claimed',
+          starterGrantMicros: 50000,
+          starterRemainingMicros: 50000,
+          balanceMicros: 50000,
+        }),
+      ),
+    ).toBeNull();
   });
 
-  it('starter under 20% of the grant → the amount left and one link', () => {
+  it('starter under 20% of the once-per-account $0.05 grant → the amount left and one link', () => {
     const b = bannerFor(
-      status({ starterRemainingMicros: 40000, balanceMicros: 40000 }),
+      status({
+        claimState: 'claimed',
+        starterGrantMicros: 50000,
+        starterRemainingMicros: 8000,
+        balanceMicros: 8000,
+      }),
     );
     expect(b?.kind).toBe('low-starter');
-    expect(b?.message).toMatch(/^\$0\.04 of free starter usage left\./);
-    expect(b?.message).toMatch(/Link this computer and pick a plan/);
+    expect(b?.message).toMatch(/^\$0\.01 of free starter usage left\./);
+    expect(b?.message).toMatch(/Add a plan or a pack/);
     expect(b?.link).toEqual({
-      label: CTA_LINK_LABEL,
+      label: CTA_ADD_LABEL,
       href: 'https://publikhq.com/claim/HK7F-2QWD',
     });
   });
@@ -185,7 +205,8 @@ describe('bannerFor — non-blocking, response-driven', () => {
       bannerFor(
         status({
           claimState: 'claimed',
-          starterRemainingMicros: 40000,
+          starterGrantMicros: 50000,
+          starterRemainingMicros: 8000,
           balanceMicros: 1900000,
         }),
       ),
