@@ -283,7 +283,7 @@ export async function acceptDisclosure(deps: ProvisionDeps = {}) {
 /* The first-run card's "Later" (and its plan button): records that the
    balance line, the justification and the CTA were shown (CONTRACT §12.4,
    "never a silent starter"). Touches nothing else — the key stays, the
-   starter stays, and the button stays in Settings. */
+   balance stays exactly as minted, and the button stays in Settings. */
 export function acknowledgeCta(deps: ProvisionDeps = {}) {
   if (!readState()) return;
   writeState({ ctaSeenAt: (deps.now ?? (() => new Date()))().toISOString() });

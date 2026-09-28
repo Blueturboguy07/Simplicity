@@ -9,11 +9,13 @@ import type { PublikStatus } from '@/lib/publik/types';
    rendered to markup the way the wizard renders it. What the mint response
    says is what the card shows: the amount, the claim_url, nothing else. */
 
+/* publik policy (founder, 2026-09-28): an install mints at $0.00. The
+   $0.05 free-use starter is granted once per publik account, on link. */
 const mintResponse = {
   claim_url: 'https://publikhq.com/claim/HK7F-2QWD',
   claim_state: 'anonymous' as const,
-  starter_micros: 250000,
-  balance_micros: 250000,
+  starter_micros: 0,
+  balance_micros: 0,
 };
 
 /* GET /api/publik after the mint above (status.ts) */
@@ -52,7 +54,9 @@ describe('PublikCard right after provisioning', () => {
   it('(a) balance line, (b) justification, (c) primary CTA — in that order, from the response', () => {
     const html = unescape(render(afterMint()));
 
-    const balance = html.indexOf('$0.25 of free starter usage');
+    const balance = html.indexOf(
+      '$0.00 · link this computer for free use',
+    );
     const why = html.indexOf(WHY_IT_COSTS);
     const cta = html.indexOf('Link this computer & pick a plan');
     expect(balance).toBeGreaterThan(-1);
@@ -72,7 +76,7 @@ describe('PublikCard right after provisioning', () => {
       afterMint({ starterRemainingMicros: 500000, balanceMicros: 500000 }),
     );
     expect(html).toContain('$0.50 of free starter usage');
-    expect(html).not.toContain('$0.25');
+    expect(html).not.toContain('$0.00 · link this computer');
   });
 
   it('a claim_url off publikhq.com is dropped from the markup', () => {
@@ -155,13 +159,18 @@ describe('PublikBannerView', () => {
     expect(html).toMatch(/href="https:\/\/publikhq\.com\/claim\/HK7F-2QWD"/);
   });
 
-  it('low starter: the amount left from the wallet, one link', () => {
+  it('low starter: the amount left from the once-per-account $0.05, one link', () => {
     const banner = bannerFor(
-      afterMint({ starterRemainingMicros: 30000, balanceMicros: 30000 }),
+      afterMint({
+        claimState: 'claimed',
+        starterGrantMicros: 50000,
+        starterRemainingMicros: 8000,
+        balanceMicros: 8000,
+      }),
     )!;
     const html = unescape(renderToStaticMarkup(<PublikBannerView banner={banner} />));
-    expect(html).toContain('$0.03 of free starter usage left.');
+    expect(html).toContain('$0.01 of free starter usage left.');
     expect(html.match(/<a\s/g)).toHaveLength(1);
-    expect(html).toContain('Link this computer & pick a plan');
+    expect(html).toContain('Add a plan or a pack');
   });
 });

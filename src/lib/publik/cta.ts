@@ -65,7 +65,13 @@ export const planCta = (
 };
 
 /* The balance line, (a) in CONTRACT §12.1: "<amount> of free starter usage"
-   from the mint response, then live from the headers. */
+   from the mint response, then live from the headers. An unlinked install
+   mints at a zero balance (publik API policy, founder 2026-09-28): the
+   amount here is always the server's, so a zero balance says only what to
+   do about it, never a specific figure and never a made-up amount — never
+   "of free starter usage" for a balance of zero. The once-per-account
+   free-use figure is static policy copy, named in the Disclosure, not a
+   balance; it is never hardcoded in this file. */
 export const balanceLine = (
   status: Pick<
     PublikStatus,
@@ -76,6 +82,9 @@ export const balanceLine = (
   if (anonymous) {
     const starter = status.starterRemainingMicros ?? status.balanceMicros;
     if (starter === null) return null;
+    if (starter <= 0) {
+      return `${formatMicros(starter)} · link this computer for free use`;
+    }
     return `${formatMicros(starter)} of free starter usage`;
   }
   if (status.balanceMicros === null) return null;

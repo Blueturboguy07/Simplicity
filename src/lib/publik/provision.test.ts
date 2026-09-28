@@ -114,6 +114,10 @@ type Received = { headers: http.IncomingHttpHeaders; body: any; url: string };
 const KEY = 'pk_live_a8k2m9x4q7v1_h3n6r9t2w5y8z1b4c7d0f3g6j9k2m5p8';
 const KEY2 = 'pk_live_b7j1n8w3p6u0_g2m5q8s1v4y7z0a3c6e9h2k5n8r1t4w7';
 
+/* publik policy (founder, 2026-09-28): an install mints at $0.00. The
+   default fake-gateway response below models that anonymous $0.00 mint;
+   tests for the once-per-account $0.05 link bonus override starter_micros
+   (and claim_state) explicitly. */
 const okBody = (overrides: Record<string, any> = {}) => ({
   install_id: 'server-echo',
   key: KEY,
@@ -127,9 +131,9 @@ const okBody = (overrides: Record<string, any> = {}) => ({
   claim_code: 'HK7F-2QWD',
   claim_url: 'https://publikhq.com/claim/HK7F-2QWD',
   claim_state: 'anonymous',
-  starter_micros: 250000,
-  balance_micros: 250000,
-  starting_credit_micros: 250000,
+  starter_micros: 0,
+  balance_micros: 0,
+  starting_credit_micros: 0,
   ...overrides,
 });
 
@@ -255,9 +259,10 @@ describe('acceptDisclosure — the mint', () => {
     expect(s.state).toBe('active');
     expect(s.claimUrl).toBe('https://publikhq.com/claim/HK7F-2QWD');
     expect(s.claimCode).toBe('HK7F-2QWD');
-    expect(s.starterMicros).toBe(250000);
+    /* publik policy: an anonymous mint is $0.00, not a starter grant. */
+    expect(s.starterMicros).toBe(0);
     expect(JSON.stringify(s)).not.toContain('pk_live_');
-    expect(publikBalance.peek().balanceMicros).toBe(250000);
+    expect(publikBalance.peek().balanceMicros).toBe(0);
   });
 
   it('is idempotent: a second call makes zero requests', async () => {
@@ -462,7 +467,7 @@ describe('the plan CTA (CONTRACT §12)', () => {
     expect(state().claimUrl).toBe('https://publikhq.com/claim/HK7F-2QWD');
   });
 
-  it('"Later" keeps the key and the free starter; only ctaSeenAt is recorded', async () => {
+  it('"Later" keeps the key and leaves the balance exactly as minted; only ctaSeenAt is recorded', async () => {
     await acceptDisclosure({ env: env() });
     const before = JSON.stringify(publikEntry());
     const balanceBefore = publikBalance.peek().balanceMicros;

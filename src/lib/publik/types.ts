@@ -14,8 +14,10 @@ export const PUBLIK_TERMS_URL = 'https://publikhq.com/terms#api';
 
 /* Bump when the disclosure copy below changes so an existing install is
    shown the new text once. The server records the value and never rejects
-   on it (CONTRACT §3.2 [S18]). */
-export const DISCLOSURE_VERSION = 1;
+   on it (CONTRACT §3.2 [S18]).
+   v2 (2026-09-28): publik's $0.00-mint / $0.05-per-account-link policy —
+   the disclosure no longer promises free usage before a computer links. */
+export const DISCLOSURE_VERSION = 2;
 
 /* Key format the gateway mints (CONTRACT §1). The parser is strict so a
    gateway that ships a different shape fails to `pending` + BYO, never to a
