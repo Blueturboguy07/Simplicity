@@ -258,3 +258,26 @@ jobs:
             model-load-race-*.log
             server-race-*.log
           if-no-files-found: warn
+
+  # THROWAWAY (branch probe/lock-window only): how long Windows refuses
+  # onnxruntime's open of a model file that was just written and closed.
+  lock-window:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+      - name: Lock window after the model download (node)
+        run: node scripts/ci/lock-window.mjs 15
+      - name: Lock window after the model download (Electron as node)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'node_modules\electron\dist\electron.exe'
+          if (!(Test-Path $exe)) { & node (Join-Path $PWD 'node_modules\electron\install.js') }
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          & $exe scripts/ci/lock-window.mjs 15
+
