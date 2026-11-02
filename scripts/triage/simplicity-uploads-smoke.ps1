@@ -25,7 +25,9 @@ $server = Start-Process -FilePath node -ArgumentList 'server.js' -WorkingDirecto
   -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr -PassThru -NoNewWindow
 
 $log = Join-Path $root 'upload-smoke.log'
-function Note($text) { $text | Tee-Object -FilePath $log -Append }
+# Write-Host + Add-Content, not Tee-Object: Tee-Object also emits to the
+# pipeline, and a function's pipeline output becomes its return value.
+function Note($text) { Write-Host $text; Add-Content -Path $log -Value $text }
 
 $providers = $null
 foreach ($i in 1..90) {
