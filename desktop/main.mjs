@@ -180,6 +180,23 @@ async function startServer() {
   throw new Error("Simplicity's server started but isn't responding.");
 }
 
+/* SIGKILL, not SIGTERM. After the server has loaded an embedding model,
+   a normal exit makes onnxruntime-node abort in its exit-time destructors
+   ("libc++abi: ... mutex lock failed: Invalid argument"), under Electron
+   and plain node alike. macOS then writes a crash report and shows a
+   "next-server quit unexpectedly" dialog after the user quits Simplicity.
+   A killed process runs no destructors. The server keeps nothing in memory
+   that needs a graceful exit: SQLite commits each write, and Next's own
+   SIGTERM handler only closes the HTTP server and calls process.exit.
+   (On Windows kill() always terminates the process.) */
+function stopServer(proc) {
+  try {
+    proc.kill('SIGKILL');
+  } catch {
+    /* already gone */
+  }
+}
+
 async function ensureRunning(onLog) {
   if (serverURL && (await isServing(serverURL))) return serverURL;
 
@@ -189,11 +206,7 @@ async function ensureRunning(onLog) {
   prepareDataDir(searxngURL);
 
   if (serverProc) {
-    try {
-      serverProc.kill();
-    } catch {
-      /* already gone */
-    }
+    stopServer(serverProc);
     serverProc = null;
   }
   onLog?.('Starting Simplicity…');
@@ -322,11 +335,7 @@ app.on('will-quit', () => {
   clearInterval(healthTimer);
   searxng.shutdown();
   if (serverProc) {
-    try {
-      serverProc.kill();
-    } catch {
-      /* already gone */
-    }
+    stopServer(serverProc);
     serverProc = null;
   }
 });
