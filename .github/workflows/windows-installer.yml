@@ -135,10 +135,11 @@ jobs:
           if-no-files-found: warn
 
   # A real Windows run of /api/uploads on every dispatch. Builds the
-  # standalone server the installer ships, starts it, and POSTs a TXT, a PDF
-  # and a PNG with the auto-registered Transformers embedding model
+  # standalone server the installer ships, starts it (plain node, then the
+  # Electron binary as node), and POSTs a TXT, a PDF, a PNG and a long TXT
+  # with the auto-registered Transformers embedding model
   # (scripts/ci/upload-smoke.ps1). Expected: txt 200, pdf 200, png 415 with
-  # the accepted-types message. v0.1.3 returned 500 "An error has occurred."
+  # the accepted-types message, long txt 200, model cache in DATA_DIR. v0.1.3 returned 500 "An error has occurred."
   # for the PNG (run 41374712334 on triage/simplicity-uploads).
   upload-smoke:
     runs-on: windows-latest
@@ -154,16 +155,22 @@ jobs:
 
       - run: yarn build:desktop
 
-      - name: Upload smoke (txt, pdf, png) against the standalone server
+      - name: Upload smoke (txt, pdf, png, long txt) against the standalone server, plain node
         shell: pwsh
-        run: ./scripts/ci/upload-smoke.ps1
+        run: ./scripts/ci/upload-smoke.ps1 -Runtime node
+
+      # The installed app runs server.js with its own Electron binary as
+      # node. Crashes that only happen there (onnxruntime SIGTRAP on a big
+      # allocation) were invisible to the plain-node pass above.
+      - name: Upload smoke under the Electron runtime the app uses (ELECTRON_RUN_AS_NODE)
+        shell: pwsh
+        run: ./scripts/ci/upload-smoke.ps1 -Runtime electron
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: upload-smoke-evidence
           path: |
-            upload-smoke.log
-            server.log
-            server.err.log
+            upload-smoke-*.log
+            server-*.log
           if-no-files-found: warn

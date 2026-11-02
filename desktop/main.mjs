@@ -17,11 +17,11 @@
 import { app, BrowserWindow, dialog, shell } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as searxng from './searxng.mjs';
+import { pickServerPort } from './serverPort.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -61,18 +61,6 @@ function resource(...parts) {
 }
 
 const standaloneDir = () => resource('.next', 'standalone');
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on('error', reject);
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address();
-      srv.close(() => resolve(port));
-    });
-  });
-}
 
 /* Lay out DATA_DIR the way Vane's server expects before it boots:
  *   data/     — it writes config.json and db.sqlite here, but won't mkdir it
@@ -141,7 +129,10 @@ async function isServing(url) {
    binaries are ABI-stable across both Node and Electron. (v11, which upstream
    pins, is not — it fails to compile against Electron 43's V8.) */
 async function startServer() {
-  const port = await freePort();
+  /* The same port every launch: the window origin, and with it everything
+     the renderer keeps in localStorage (model choice, settings), must
+     survive a restart. See serverPort.mjs. */
+  const port = await pickServerPort(dataDir());
   const url = `http://127.0.0.1:${port}`;
   const dir = standaloneDir();
 
@@ -149,7 +140,7 @@ async function startServer() {
     throw new Error(`Simplicity's server build is missing at ${dir}. Run \`yarn build\` first.`);
   }
 
-  serverProc = spawn(process.execPath, [path.join(dir, 'server.js')], {
+  const child = spawn(process.execPath, [path.join(dir, 'server.js')], {
     cwd: dir,
     env: {
       ...process.env,
@@ -165,9 +156,16 @@ async function startServer() {
        only as "isn't responding" with no way to find out why. */
     stdio: ['ignore', logFd(), logFd()],
   });
-  serverProc.on('exit', () => {
-    serverProc = null;
-    serverURL = null;
+  serverProc = child;
+  /* Clear the globals only for THIS child. A server we stopped can exit after
+     its replacement started; clearing then made the health watch start a
+     third server while the second still held the port. */
+  child.on('exit', (code, signal) => {
+    log(`server exited (code ${code}, signal ${signal})`);
+    if (serverProc === child) {
+      serverProc = null;
+      serverURL = null;
+    }
   });
 
   const start = Date.now();
@@ -176,9 +174,27 @@ async function startServer() {
       serverURL = url;
       return url;
     }
+    if (serverProc !== child) break;
     await new Promise((r) => setTimeout(r, 400));
   }
   throw new Error("Simplicity's server started but isn't responding.");
+}
+
+/* SIGKILL, not SIGTERM. After the server has loaded an embedding model,
+   a normal exit makes onnxruntime-node abort in its exit-time destructors
+   ("libc++abi: ... mutex lock failed: Invalid argument"), under Electron
+   and plain node alike. macOS then writes a crash report and shows a
+   "next-server quit unexpectedly" dialog after the user quits Simplicity.
+   A killed process runs no destructors. The server keeps nothing in memory
+   that needs a graceful exit: SQLite commits each write, and Next's own
+   SIGTERM handler only closes the HTTP server and calls process.exit.
+   (On Windows kill() always terminates the process.) */
+function stopServer(proc) {
+  try {
+    proc.kill('SIGKILL');
+  } catch {
+    /* already gone */
+  }
 }
 
 async function ensureRunning(onLog) {
@@ -190,11 +206,7 @@ async function ensureRunning(onLog) {
   prepareDataDir(searxngURL);
 
   if (serverProc) {
-    try {
-      serverProc.kill();
-    } catch {
-      /* already gone */
-    }
+    stopServer(serverProc);
     serverProc = null;
   }
   onLog?.('Starting Simplicity…');
@@ -202,17 +214,44 @@ async function ensureRunning(onLog) {
 }
 
 /* Poll health; if either service died, bring it back and reload so the user
-   never sees a blank page. */
+   never sees a blank page.
+   A server process that is alive but slow to answer (a long upload or a
+   search keeps it busy) is not dead: killing it loses that work. So restart
+   at once only when the process has exited, and otherwise only after
+   MAX_MISSED_CHECKS failed checks in a row. One tick at a time: a restart can
+   take longer than the interval, and an overlapping tick used to kill the
+   server that was still booting. */
+const MAX_MISSED_CHECKS = 3;
+let missedChecks = 0;
+let healthBusy = false;
+
 function startHealthWatch() {
   clearInterval(healthTimer);
   healthTimer = setInterval(async () => {
-    if (!mainWindow) return;
-    const before = serverURL;
+    if (!mainWindow || healthBusy) return;
+    healthBusy = true;
     try {
+      if (serverProc && serverURL) {
+        if (await isServing(serverURL)) {
+          missedChecks = 0;
+          return;
+        }
+        missedChecks += 1;
+        log(`health check missed (${missedChecks}/${MAX_MISSED_CHECKS})`);
+        if (missedChecks < MAX_MISSED_CHECKS) return;
+      }
+      missedChecks = 0;
+      const before = serverURL;
+      const procBefore = serverProc;
       const url = await ensureRunning();
-      if (url !== before) mainWindow.loadURL(url);
+      if (url !== before || serverProc !== procBefore) {
+        log(`server restarted at ${url}`);
+        mainWindow?.loadURL(url);
+      }
     } catch {
       /* transient — try again on the next tick */
+    } finally {
+      healthBusy = false;
     }
   }, 5000);
 }
@@ -296,11 +335,7 @@ app.on('will-quit', () => {
   clearInterval(healthTimer);
   searxng.shutdown();
   if (serverProc) {
-    try {
-      serverProc.kill();
-    } catch {
-      /* already gone */
-    }
+    stopServer(serverProc);
     serverProc = null;
   }
 });

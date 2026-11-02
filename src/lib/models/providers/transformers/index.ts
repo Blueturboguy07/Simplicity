@@ -8,14 +8,14 @@ import TransformerEmbedding from './transformerEmbedding';
 
 interface TransformersConfig {}
 
-const defaultEmbeddingModels: Model[] = [
+/* The first entry is the default (setup and pickEmbeddingModel use it).
+   mixedbread-ai/mxbai-embed-large-v1 was removed in 1.12.4: its 1.34 GB fp32
+   model crashes the packaged server (SIGTRAP in onnxruntime under Electron)
+   as soon as it loads, so every upload and web search with it failed. */
+export const defaultEmbeddingModels: Model[] = [
   {
     name: 'all-MiniLM-L6-v2',
     key: 'Xenova/all-MiniLM-L6-v2',
-  },
-  {
-    name: 'mxbai-embed-large-v1',
-    key: 'mixedbread-ai/mxbai-embed-large-v1',
   },
   {
     name: 'nomic-embed-text-v1',

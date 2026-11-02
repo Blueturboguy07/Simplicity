@@ -211,7 +211,15 @@ class UploadManager {
 
             fs.writeFileSync(filePath, buffer);
 
-            const contentFilePath = await this.extractContentAndEmbed(filePath, mime);
+            /* A failed parse or embed must not leave the raw file behind: it
+               is never recorded, so nothing would ever read or delete it. */
+            let contentFilePath: string;
+            try {
+                contentFilePath = await this.extractContentAndEmbed(filePath, mime);
+            } catch (err) {
+                fs.rmSync(filePath, { force: true });
+                throw err;
+            }
 
             const fileRecord: RecordedFile = {
                 id: fileId,

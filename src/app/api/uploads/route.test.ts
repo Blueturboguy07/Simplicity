@@ -123,6 +123,17 @@ describe('POST /api/uploads', () => {
       'Upload failed: getaddrinfo ENOTFOUND huggingface.co',
     );
   });
+
+  it('a failed embed leaves no orphan file behind (smoke 2026-11-01: 3 orphan PDFs)', async () => {
+    const before = storedFiles().length;
+    embedText.mockRejectedValueOnce(
+      new Error("ENOENT: no such file or directory, mkdir '/Simplicity.app/.cache'"),
+    );
+    const res = await post([txt()]);
+
+    expect(res.status).toBe(500);
+    expect(storedFiles().length).toBe(before);
+  });
 });
 
 describe('UploadManager.processFiles', () => {

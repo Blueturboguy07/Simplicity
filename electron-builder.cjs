@@ -34,7 +34,7 @@ module.exports = {
      a rebuild adds nothing on the native arch and hard-fails the Windows
      cross-build (node-gyp cannot cross-compile). */
   npmRebuild: false,
-  files: ['desktop/**', 'package.json', '!**/*.map'],
+  files: ['desktop/**', 'package.json', '!**/*.map', '!desktop/**/*.test.mjs'],
   extraMetadata: { main: 'desktop/main.mjs' },
   /* .next/standalone and drizzle/ are staged into the bundle by the afterPack
      hook, not by extraResources — see desktop/afterPack.cjs for why. */
