@@ -231,21 +231,21 @@ jobs:
           }
           exit 1
 
-      - name: Model file held open on the first load, plain node
+      - name: Model file held open (first load, from disk, locked), plain node
         shell: pwsh
         run: ./scripts/ci/model-load-race.ps1 -Runtime node -Mode probe
 
-      - name: Model file held open on the first load, Electron runtime
+      - name: Model file held open (first load, from disk, locked), Electron runtime
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/ci/model-load-race.ps1 -Runtime electron -Mode probe
 
-      - name: Real first load, 8 fresh installs, plain node
+      - name: Real first load and load from disk, 8 fresh installs, plain node
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/ci/model-load-race.ps1 -Runtime node -Mode stress -Rounds 8
 
-      - name: Real first load, 8 fresh installs, Electron runtime
+      - name: Real first load and load from disk, 8 fresh installs, Electron runtime
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         shell: pwsh
         run: ./scripts/ci/model-load-race.ps1 -Runtime electron -Mode stress -Rounds 8
