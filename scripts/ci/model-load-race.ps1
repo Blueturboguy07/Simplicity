@@ -16,10 +16,11 @@
 #                 the first upload returns 200;
 #              C) model already downloaded, a write handle on it for 40 s from
 #                 server start: the upload returns 200;
-#              B) model already downloaded, an exclusive handle on it for 40 s
-#                 (longer than every retry together): the upload returns 500
-#                 with the plain message and no path, and the next upload
-#                 after the handle closes returns 200.
+#              B) model already downloaded, this script holds it with .NET
+#                 FileShare.None (no other open works) during the upload: the
+#                 upload returns 500 with the plain message and no path after
+#                 all retries, and the next upload after the handle closes
+#                 returns 200.
 # -Mode stress repeats the real first load -Rounds times, each with a new
 #              DATA_DIR and a new server process, then starts the server once
 #              more on the same DATA_DIR and uploads again (model from disk),
@@ -60,7 +61,7 @@ function Read-Shared($path) {
 function CountOf($text, $needle) { return ([regex]::Matches($text, [regex]::Escape($needle))).Count }
 
 # $keep: start on the DATA_DIR of an earlier round as it is (model on disk).
-function Start-Server([string]$tag, [int]$holdMs, [string]$holdMode = 'write', [string]$keep = '') {
+function Start-Server([string]$tag, [int]$holdMs, [string]$keep = '') {
   $data = Join-Path $env:RUNNER_TEMP "simplicity-race-$Runtime-$tag"
   if ($keep) {
     $data = $keep
@@ -76,7 +77,6 @@ function Start-Server([string]$tag, [int]$holdMs, [string]$holdMode = 'write', [
   if ($Runtime -eq 'electron') { $env:ELECTRON_RUN_AS_NODE = '1' }
   if ($holdMs -gt 0) {
     $env:SIMPLICITY_CI_HOLD_MODEL_MS = "$holdMs"
-    $env:SIMPLICITY_CI_HOLD_MODE = $holdMode
     $env:NODE_OPTIONS = "--require $hold"
   }
   $out = Join-Path $root "server-race-$Runtime-$tag.log"
@@ -85,7 +85,6 @@ function Start-Server([string]$tag, [int]$holdMs, [string]$holdMode = 'write', [
     -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow
   Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue
   Remove-Item Env:SIMPLICITY_CI_HOLD_MODEL_MS -ErrorAction SilentlyContinue
-  Remove-Item Env:SIMPLICITY_CI_HOLD_MODE -ErrorAction SilentlyContinue
 
   $providers = $null
   foreach ($i in 1..120) {
@@ -132,7 +131,7 @@ if ($Mode -eq 'probe') {
 
   # A) fresh install: a write handle on model.onnx for 3 s from the moment
   #    the file exists (v0.1.5 failed here every time).
-  $s = Start-Server 'hold3' 3000 'write'
+  $s = Start-Server 'hold3' 3000
   $a = Up $s $notes
   $released = WaitReleased $s
   Stop-Server $s
@@ -145,7 +144,7 @@ if ($Mode -eq 'probe') {
   $cached = $s.data
 
   # C) model on disk, a write handle on it for 40 s from server start.
-  $s = Start-Server 'hold40w' 40000 'write' $cached
+  $s = Start-Server 'hold40w' 40000 $cached
   $c = Up $s $notes
   Stop-Server $s
   $errC = Read-Shared $s.err
@@ -155,29 +154,32 @@ if ($Mode -eq 'probe') {
   if (-not $heldC) { $failures += 'C: probe did not engage (no [ci-hold] holding line)' }
   if ($c.code -ne 'HTTP 200') { $failures += "C: upload with a write handle on the downloaded model returned $($c.code), not 200" }
 
-  # B) model on disk, an exclusive handle on it for 40 s: every try fails.
-  $s = Start-Server 'hold40x' 40000 'exclusive' $cached
+  # B) model on disk, locked by this script (FileShare.None) during the
+  #    upload: every try fails; after the handle closes the next upload works.
+  $modelFile = Join-Path $cached 'models\Xenova\all-MiniLM-L6-v2\onnx\model.onnx'
+  $s = Start-Server 'lock' 0 $cached
+  $lock = [System.IO.File]::Open($modelFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+  $lockedNow = $false
+  try { [System.IO.File]::Open($modelFile, 'Open', 'Read', 'ReadWrite, Delete').Close() } catch { $lockedNow = $true }
   $b1 = Up $s $notes
-  $releasedB = WaitReleased $s
+  $lock.Close()
   $b2 = Up $s $notes
   Stop-Server $s
   $errB = Read-Shared $s.err
-  $heldB = (CountOf $errB '[ci-hold] holding') -ge 1
   $retriesB = CountOf $errB 'Embedding model file busy'
-  Note "PROBE-B runtime=$Runtime hold=exclusive/40000ms first: code=$($b1.code) secs=$($b1.secs) body=$($b1.body)"
-  Note "PROBE-B runtime=$Runtime after release=$releasedB next: code=$($b2.code) secs=$($b2.secs) held=$heldB busyRetries=$retriesB"
-  if (-not $heldB) { $failures += 'B: probe did not engage (no [ci-hold] holding line)' }
-  if ($b1.code -ne 'HTTP 500') { $failures += "B: upload with the model file locked 40 s returned $($b1.code), not 500" }
+  Note "PROBE-B runtime=$Runtime lock=FileShare.None lockedCheck=$lockedNow first: code=$($b1.code) secs=$($b1.secs) busyRetries=$retriesB body=$($b1.body)"
+  Note "PROBE-B runtime=$Runtime after close next: code=$($b2.code) secs=$($b2.secs)"
+  if (-not $lockedNow) { $failures += 'B: the FileShare.None lock did not block a shared read' }
+  if ($b1.code -ne 'HTTP 500') { $failures += "B: upload with the model file locked returned $($b1.code), not 500" }
   if ((MsgOf $b1) -ne $plain) { $failures += "B: message is not the plain one: $($b1.body)" }
-  if ($b1.body -match 'model\.onnx|Load model|system error|EBUSY|EACCES|simplicity-race') { $failures += 'B: message shows the raw error or path' }
-  if (-not $releasedB) { $failures += 'B: hold was never released' }
-  if ($b2.code -ne 'HTTP 200') { $failures += "B: next upload after the handle closed returned $($b2.code), not 200" }
+  if ($b1.body -match 'model\.onnx|Load model|system error|EBUSY|EACCES|EPERM|simplicity-race') { $failures += 'B: message shows the raw error or path' }
+  if ($b2.code -ne 'HTTP 200') { $failures += "B: next upload after the lock closed returned $($b2.code), not 200" }
 
   Note '=== server-race hold3 err ==='
   Note $errA
   Note '=== server-race hold40w err ==='
   Note $errC
-  Note '=== server-race hold40x err ==='
+  Note '=== server-race lock err ==='
   Note $errB
 
   Note "RESULT mode=probe runtime=$Runtime A=$($a.code) C=$($c.code) B1=$($b1.code) B2=$($b2.code) failures=$($failures.Count)"
@@ -193,7 +195,7 @@ else {
     Stop-Server $s
     $err = Read-Shared $s.err
     # Second start on the same DATA_DIR: the model now comes from disk.
-    $s2 = Start-Server "s${r}d" 0 'write' $s.data
+    $s2 = Start-Server "s${r}d" 0 $s.data
     $u2 = Up $s2 $notes
     Stop-Server $s2
     $err2 = Read-Shared $s2.err
