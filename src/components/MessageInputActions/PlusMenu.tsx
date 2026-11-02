@@ -13,10 +13,18 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useChat } from '@/lib/hooks/useChat';
 import { toast } from 'sonner';
 import SettingsDialogue from '../Settings/SettingsDialogue';
+import {
+  rejectUnsupportedUpload,
+  uploadAccept,
+  uploadMenuLabel,
+} from '@/lib/uploads/accepted';
 
 /* Perplexity ground truth (2026-07): the composer's "+" button opens a menu
-   with "Upload files or images" on top and a "Connectors ›" row that expands
-   into the same Web/Academic/Discussions checkboxes as the Sources pill.
+   with an upload row on top and a "Connectors ›" row that expands into the
+   same Web/Academic/Discussions checkboxes as the Sources pill. Perplexity's
+   row says "Upload files or images"; ours names what /api/uploads can read
+   (src/lib/uploads/accepted.ts), because the server does not read images and
+   the old label sent users into a dead end (bug ba38da9b, harifhashimi).
    Bound to the SAME `sources` state Sources.tsx reads/writes, so toggling a
    connector here or from the pill can never leave the two UIs disagreeing
    about what's enabled. */
@@ -56,6 +64,16 @@ const PlusMenu = () => {
     const selectedFiles = e.target.files;
 
     if (!selectedFiles?.length) {
+      return;
+    }
+
+    /* Same check as the server: the toast names the file and what to send
+       instead, and no bytes leave the machine for a type the server rejects. */
+    const rejected = rejectUnsupportedUpload(Array.from(selectedFiles));
+
+    if (rejected) {
+      toast(rejected);
+      e.target.value = '';
       return;
     }
 
@@ -122,7 +140,7 @@ const PlusMenu = () => {
               type="file"
               onChange={handleChange}
               ref={fileInputRef}
-              accept=".pdf,.docx,.txt"
+              accept={uploadAccept}
               multiple
               hidden
             />
@@ -151,7 +169,7 @@ const PlusMenu = () => {
                       >
                         <span className="flex flex-row items-center space-x-2">
                           <Paperclip size={15} />
-                          <span className="text-xs">Upload files or images</span>
+                          <span className="text-xs">{uploadMenuLabel}</span>
                         </span>
                         {files.length > 0 && (
                           <span className="text-[10px] text-black/40 dark:text-white/40">

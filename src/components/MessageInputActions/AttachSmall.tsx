@@ -10,6 +10,7 @@ import { useChat } from '@/lib/hooks/useChat';
 import { AnimatePresence } from 'motion/react';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
+import { rejectUnsupportedUpload, uploadAccept } from '@/lib/uploads/accepted';
 
 const AttachSmall = () => {
   const { files, setFiles, setFileIds, fileIds } = useChat();
@@ -21,6 +22,16 @@ const AttachSmall = () => {
     const selectedFiles = e.target.files;
 
     if (!selectedFiles?.length) {
+      return;
+    }
+
+    /* Same check as the server (src/lib/uploads/accepted.ts): the toast
+       names the file and what to send instead. */
+    const rejected = rejectUnsupportedUpload(Array.from(selectedFiles));
+
+    if (rejected) {
+      toast(rejected);
+      e.target.value = '';
       return;
     }
 
@@ -114,7 +125,7 @@ const AttachSmall = () => {
                           type="file"
                           onChange={handleChange}
                           ref={fileInputRef}
-                          accept=".pdf,.docx,.txt"
+                          accept={uploadAccept}
                           multiple
                           hidden
                         />
@@ -175,7 +186,7 @@ const AttachSmall = () => {
         type="file"
         onChange={handleChange}
         ref={fileInputRef}
-        accept=".pdf,.docx,.txt"
+        accept={uploadAccept}
         multiple
         hidden
       />

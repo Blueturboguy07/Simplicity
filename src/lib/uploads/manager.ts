@@ -6,10 +6,14 @@ import { splitText } from "../utils/splitText";
 import { PDFParse } from 'pdf-parse';
 import { CanvasFactory } from 'pdf-parse/worker';
 import officeParser from 'officeparser'
+import {
+    AcceptedMime,
+    resolveUploadType,
+    unsupportedUploadMessage,
+    UnsupportedUploadError,
+} from './accepted';
 
-const supportedMimeTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/plain'] as const
-
-type SupportedMimeType = typeof supportedMimeTypes[number];
+type SupportedMimeType = AcceptedMime;
 
 type UploadManagerParams = {
     embeddingModel: BaseEmbedding<any>;
@@ -181,13 +185,22 @@ class UploadManager {
     }
 
     async processFiles(files: File[]): Promise<FileRes[]> {
-        const processedFiles: FileRes[] = [];
+        /* Resolve every file before any byte is written: one bad file in a
+           multi-select used to throw after the others were already stored
+           and recorded. */
+        const resolved = files.map((file) => {
+            const type = resolveUploadType(file);
 
-        await Promise.all(files.map(async (file) => {
-            if (!(supportedMimeTypes as unknown as string[]).includes(file.type)) {
-                throw new Error(`File type ${file.type} not supported`);
+            if (!type) {
+                throw new UnsupportedUploadError(unsupportedUploadMessage(file));
             }
 
+            return { file, mime: type.mime };
+        });
+
+        const processedFiles: FileRes[] = [];
+
+        await Promise.all(resolved.map(async ({ file, mime }) => {
             const fileId = crypto.randomBytes(16).toString('hex');
 
             const fileExtension = file.name.split('.').pop();
@@ -198,7 +211,7 @@ class UploadManager {
 
             fs.writeFileSync(filePath, buffer);
 
-            const contentFilePath = await this.extractContentAndEmbed(filePath, file.type as SupportedMimeType);
+            const contentFilePath = await this.extractContentAndEmbed(filePath, mime);
 
             const fileRecord: RecordedFile = {
                 id: fileId,
