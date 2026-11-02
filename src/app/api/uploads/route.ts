@@ -5,6 +5,7 @@ import {
   rejectUnsupportedUpload,
   UnsupportedUploadError,
 } from '@/lib/uploads/accepted';
+import { ModelLoadError } from '@/lib/models/providers/transformers/transformerEmbedding';
 
 export async function POST(req: Request) {
   try {
@@ -47,6 +48,15 @@ export async function POST(req: Request) {
 
     if (error instanceof UnsupportedUploadError) {
       return NextResponse.json({ message: error.message }, { status: 415 });
+    }
+
+    /* The embedding model did not load even after the retries. Its own
+       error names the model file's path on disk; that stays in the log. */
+    if (
+      error instanceof ModelLoadError ||
+      (error instanceof Error && error.name === 'ModelLoadError')
+    ) {
+      return NextResponse.json({ message: error.message }, { status: 500 });
     }
 
     /* The reason, not "An error has occurred.": the toast shows this text,
