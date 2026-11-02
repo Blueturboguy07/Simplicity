@@ -133,3 +133,37 @@ jobs:
             install-stream.ndjson
             dev.log
           if-no-files-found: warn
+
+  # A real Windows run of /api/uploads on every dispatch. Builds the
+  # standalone server the installer ships, starts it, and POSTs a TXT, a PDF
+  # and a PNG with the auto-registered Transformers embedding model
+  # (scripts/ci/upload-smoke.ps1). Expected: txt 200, pdf 200, png 415 with
+  # the accepted-types message. v0.1.3 returned 500 "An error has occurred."
+  # for the PNG (run 41374712334 on triage/simplicity-uploads).
+  upload-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: yarn build:desktop
+
+      - name: Upload smoke (txt, pdf, png) against the standalone server
+        shell: pwsh
+        run: ./scripts/ci/upload-smoke.ps1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upload-smoke-evidence
+          path: |
+            upload-smoke.log
+            server.log
+            server.err.log
+          if-no-files-found: warn
