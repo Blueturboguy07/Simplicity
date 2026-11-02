@@ -37,6 +37,10 @@ $env:NODE_ENV = 'production'
 $exe = 'node'
 if ($Runtime -eq 'electron') {
   $exe = Join-Path $root 'node_modules\electron\dist\electron.exe'
+  # yarn install leaves the binary out here (electron-builder fetches its
+  # own copy), so fetch the exact version from package.json the same way
+  # electron's postinstall does.
+  if (!(Test-Path $exe)) { & node (Join-Path $root 'node_modules\electron\install.js') }
   if (!(Test-Path $exe)) { throw "electron binary missing at $exe" }
   $env:ELECTRON_RUN_AS_NODE = '1'
 }
