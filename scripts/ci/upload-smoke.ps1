@@ -20,12 +20,13 @@ param([ValidateSet('node', 'electron')][string]$Runtime = 'node')
 $ErrorActionPreference = 'Stop'
 
 $root = $PWD
-$standalone = Join-Path $root '.next\standalone'
+$standalone = if ($env:SIMPLICITY_CI_STANDALONE) { $env:SIMPLICITY_CI_STANDALONE } else { Join-Path $root '.next\standalone' }
+$drizzleSrc = if ($env:SIMPLICITY_CI_DRIZZLE) { $env:SIMPLICITY_CI_DRIZZLE } else { Join-Path $root 'drizzle' }
 if (!(Test-Path (Join-Path $standalone 'server.js'))) { throw 'standalone server missing - run yarn build:desktop first' }
 
 $data = Join-Path $env:RUNNER_TEMP "simplicity-data-$Runtime"
 New-Item -ItemType Directory -Force (Join-Path $data 'data') | Out-Null
-Copy-Item -Recurse -Force (Join-Path $root 'drizzle') (Join-Path $data 'drizzle')
+Copy-Item -Recurse -Force $drizzleSrc (Join-Path $data 'drizzle')
 
 $port = if ($Runtime -eq 'electron') { '3118' } else { '3117' }
 $base = "http://127.0.0.1:$port"
@@ -36,7 +37,7 @@ $env:NODE_ENV = 'production'
 
 $exe = 'node'
 if ($Runtime -eq 'electron') {
-  $exe = Join-Path $root 'node_modules\electron\dist\electron.exe'
+  $exe = if ($env:SIMPLICITY_CI_ELECTRON_EXE) { $env:SIMPLICITY_CI_ELECTRON_EXE } else { Join-Path $root 'node_modules\electron\dist\electron.exe' }
   # yarn install leaves the binary out here (electron-builder fetches its
   # own copy), so fetch the exact version from package.json the same way
   # electron's postinstall does.

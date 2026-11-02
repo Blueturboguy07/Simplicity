@@ -147,6 +147,7 @@ jobs:
   # the accepted-types message, long txt 200, model cache in DATA_DIR. v0.1.3 returned 500 "An error has occurred."
   # for the PNG (run 41374712334 on triage/simplicity-uploads).
   upload-smoke:
+    if: ${{ false }}  # probe/released-bytes: only the released-exe job runs
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -203,6 +204,7 @@ jobs:
   # (3 s, then 40 s) so the race happens every time; stress: the real first
   # load, each round with a new DATA_DIR and server (scripts/ci/model-load-race.ps1).
   model-load-race:
+    if: ${{ false }}  # probe/released-bytes: only the released-exe job runs
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -258,3 +260,55 @@ jobs:
             model-load-race-*.log
             server-race-*.log
           if-no-files-found: warn
+
+  # THROWAWAY (branch probe/released-bytes, never merged): the same upload
+  # smoke and model-load probes, run against the PUBLISHED installer bytes.
+  # Downloads Simplicity-Setup-Windows.exe from the release (a draft too),
+  # installs it silently, and starts the installed server.js with the
+  # installed Simplicity.exe (ELECTRON_RUN_AS_NODE), as the app does.
+  released-exe:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        tag: [v0.1.6, v0.1.5]
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and install ${{ matrix.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force rel | Out-Null
+          gh release download ${{ matrix.tag }} -R ${{ github.repository }} -p Simplicity-Setup-Windows.exe -D rel --clobber
+          $setup = Join-Path $PWD 'rel\Simplicity-Setup-Windows.exe'
+          $sha = (Get-FileHash -Algorithm SHA256 $setup).Hash.ToLower()
+          Write-Host "RELEASED-EXE tag=${{ matrix.tag }} bytes=$((Get-Item $setup).Length) sha256=$sha"
+          Start-Process -FilePath $setup -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity'
+          $app = Join-Path $dir 'Simplicity.exe'
+          if (!(Test-Path $app)) { throw "Simplicity.exe missing after install" }
+          $ver = (Get-Item $app).VersionInfo.ProductVersion
+          Write-Host "INSTALLED tag=${{ matrix.tag }} Simplicity.exe ProductVersion=$ver"
+          "SIMPLICITY_CI_STANDALONE=$(Join-Path $dir 'resources\.next\standalone')" >> $env:GITHUB_ENV
+          "SIMPLICITY_CI_DRIZZLE=$(Join-Path $dir 'resources\drizzle')" >> $env:GITHUB_ENV
+          "SIMPLICITY_CI_ELECTRON_EXE=$app" >> $env:GITHUB_ENV
+
+      - name: Upload smoke on the installed app (txt, pdf, png, long txt)
+        shell: pwsh
+        run: ./scripts/ci/upload-smoke.ps1 -Runtime electron
+
+      - name: Model-load probes on the installed app (A, C, B)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/ci/model-load-race.ps1 -Runtime electron -Mode probe
+
+      - name: Real first load and load from disk, 8 fresh installs, installed app
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/ci/model-load-race.ps1 -Runtime electron -Mode stress -Rounds 8

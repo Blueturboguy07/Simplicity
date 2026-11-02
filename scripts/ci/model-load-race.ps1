@@ -34,12 +34,13 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $root = $PWD
-$standalone = Join-Path $root '.next\standalone'
+$standalone = if ($env:SIMPLICITY_CI_STANDALONE) { $env:SIMPLICITY_CI_STANDALONE } else { Join-Path $root '.next\standalone' }
+$drizzleSrc = if ($env:SIMPLICITY_CI_DRIZZLE) { $env:SIMPLICITY_CI_DRIZZLE } else { Join-Path $root 'drizzle' }
 if (!(Test-Path (Join-Path $standalone 'server.js'))) { throw 'standalone server missing - run yarn build:desktop first' }
 
 $exe = 'node'
 if ($Runtime -eq 'electron') {
-  $exe = Join-Path $root 'node_modules\electron\dist\electron.exe'
+  $exe = if ($env:SIMPLICITY_CI_ELECTRON_EXE) { $env:SIMPLICITY_CI_ELECTRON_EXE } else { Join-Path $root 'node_modules\electron\dist\electron.exe' }
   if (!(Test-Path $exe)) { & node (Join-Path $root 'node_modules\electron\install.js') }
   if (!(Test-Path $exe)) { throw "electron binary missing at $exe" }
 }
@@ -68,7 +69,7 @@ function Start-Server([string]$tag, [int]$holdMs, [string]$keep = '') {
   } else {
     if (Test-Path $data) { Remove-Item -Recurse -Force $data }
     New-Item -ItemType Directory -Force (Join-Path $data 'data') | Out-Null
-    Copy-Item -Recurse -Force (Join-Path $root 'drizzle') (Join-Path $data 'drizzle')
+    Copy-Item -Recurse -Force $drizzleSrc (Join-Path $data 'drizzle')
   }
   $env:DATA_DIR = $data
   $env:PORT = $port
