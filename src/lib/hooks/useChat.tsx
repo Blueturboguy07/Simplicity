@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import { getSuggestions } from '../actions';
 import { MinimalProvider } from '../models/types';
 import { pickDefaultModel } from '../models/catalog';
+import { pickEmbeddingModel } from '../models/embeddingPick';
 import { getAutoMediaSearch } from '../config/clientRegistry';
 import { applyPatch } from 'rfc6902';
 import { Widget } from '@/components/ChatWindow';
@@ -151,38 +152,22 @@ const checkConfig = async (
     chatModelProviderId = chatModelProvider.id;
     chatModelKey = resolvedChatKey;
 
-    /* Embeddings only rerank search results, so this is never a user choice.
-       Prefer a purpose-built embedding model — Ollama lists its chat models
-       here too, and picking one of those means running every search result
-       through a 7B chat model. */
-    const embeddingModelProvider =
-      providers.find((p) => p.id === embeddingModelProviderId) ??
-      providers.find(
-        (p) =>
-          p.type === 'ollama' &&
-          p.embeddingModels.some((m) => m.key.includes('embed')),
-      ) ??
-      providers.find((p) => p.embeddingModels.length > 0);
+    /* Embeddings only rank search results and file chunks, so this is never
+       a user choice. The rules (and why the Transformers default must be the
+       small model setup picked) are in pickEmbeddingModel. */
+    const embeddingPick = pickEmbeddingModel(providers, {
+      providerId: embeddingModelProviderId,
+      key: embeddingModelKey,
+    });
 
-    if (!embeddingModelProvider) {
+    if (!embeddingPick) {
       throw new Error(
-        'No embedding models found, pleae configure them in the settings page.',
+        'No embedding models found, please configure them in the settings page.',
       );
     }
 
-    embeddingModelProviderId = embeddingModelProvider.id;
-
-    /* Same reasoning as the provider choice above: prefer an actual embedding
-       model over index 0, which for Ollama is a chat model. */
-    const embeddingModel =
-      embeddingModelProvider.embeddingModels.find(
-        (m) => m.key === embeddingModelKey,
-      ) ??
-      embeddingModelProvider.embeddingModels.find((m) =>
-        m.key.includes('embed'),
-      ) ??
-      embeddingModelProvider.embeddingModels[0];
-    embeddingModelKey = embeddingModel.key;
+    embeddingModelProviderId = embeddingPick.providerId;
+    embeddingModelKey = embeddingPick.key;
 
     localStorage.setItem('chatModelKey', chatModelKey);
     localStorage.setItem('chatModelProviderId', chatModelProviderId);
