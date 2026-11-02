@@ -1,0 +1,3 @@
+Simplicity upload test.
+The secret word in this text file is PELICAN-7421.
+This line exists so the splitter has something to chunk.

@@ -37,7 +37,7 @@ jobs:
     # bugfix-lab scaffolding: skip ONLY on the lab branch, so the oracle's
     # dispatches don't also build a release installer. Every other ref --
     # `desktop`, a tag, a real fix branch -- is unaffected.
-    if: ${{ github.ref_name != 'fix/simplicity-free-tier-api-key-confusion-mac-win' }}
+    if: ${{ github.ref_name != 'fix/simplicity-free-tier-api-key-confusion-mac-win' && github.ref_name != 'triage/simplicity-uploads' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -132,4 +132,38 @@ jobs:
           path: |
             install-stream.ndjson
             dev.log
+          if-no-files-found: warn
+
+  # triage/simplicity-uploads only: a real Windows run of /api/uploads. Builds
+  # the standalone server the installer ships, starts it, and POSTs a TXT, a
+  # PDF and a PNG with the auto-registered Transformers embedding model.
+  # Expected on the current code: txt 200, pdf 200, png 500 ("File type
+  # image/png not supported"). Never runs on any other ref.
+  upload-smoke:
+    if: ${{ github.ref_name == 'triage/simplicity-uploads' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: yarn build:desktop
+
+      - name: Upload smoke (txt, pdf, png) against the standalone server
+        shell: pwsh
+        run: ./scripts/triage/simplicity-uploads-smoke.ps1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upload-smoke-evidence
+          path: |
+            upload-smoke.log
+            server.log
+            server.err.log
           if-no-files-found: warn
