@@ -39,16 +39,83 @@ export class ModelLoadError extends Error {
   }
 }
 
-/* The first load on Windows can fail with "Load model from
+/* Why the models are not kept by transformers' own file cache (v0.1.6).
+   The first upload of a fresh Windows install failed with "Load model from
    ...\models\Xenova\all-MiniLM-L6-v2\onnx\model.onnx failed:system error
-   number 13" (CI run 41408225083, 1 of 11 fresh loads). transformers.js
-   3.8.1 writes the downloaded model with a stream, calls close() without
-   waiting for it, and hands the path to onnxruntime at once; onnxruntime
-   opens the file with "deny others write", which Windows refuses while the
-   write handle (or a virus scan of the new file) is still open. The file is
-   complete and opens a moment later, so a busy file is tried again after
-   these waits (7.75 s in all; on Windows each wait also runs on, up to the
-   same time again, while the file is still open). */
+   number 13" (CI run 41408225083), and every model load after it in the same
+   app session failed the same way:
+   1. transformers.js 3.8.1 writes a download with a stream, calls close()
+      without waiting for it, and gives onnxruntime the file PATH. onnxruntime
+      opens the file "deny others write", and Windows refuses that open while
+      the write handle is still open.
+   2. transformers.js keeps the first onnxruntime session promise of the
+      process and waits on it before each later session, so after one failed
+      first session every later load fails at once, until the app restarts.
+   So this cache keeps the models: a download goes to a .part file, which is
+   closed and then renamed into place; a cached model is read by Node (which
+   shares the file with other programs). transformers.js then gives
+   onnxruntime the model as bytes, and onnxruntime never opens the file. The
+   folders are the same as transformers' own cache
+   (<DATA_DIR>/models/<model>/<file>), so models that older versions
+   downloaded are used as they are.
+   Evidence: GitHub Actions runs 41424215347 and 41425843431. */
+const cachedFile = (dir: string, key: string): string | null => {
+  /* transformers asks a custom cache for the remote URL:
+     https://huggingface.co/<model>/resolve/main/<file> */
+  const m = /^https?:\/\/[^/]+\/(.+?)\/resolve\/main\/(.+)$/.exec(key);
+  if (!m) return null;
+  const base = path.resolve(dir);
+  const file = path.resolve(base, ...m[1].split('/'), ...m[2].split('/'));
+  return file.startsWith(base + path.sep) ? file : null;
+};
+
+const readBytes = async (file: string): Promise<ArrayBuffer> => {
+  const b = await fs.promises.readFile(file);
+  return b.byteOffset === 0 && b.byteLength === b.buffer.byteLength
+    ? (b.buffer as ArrayBuffer)
+    : (b.buffer.slice(
+        b.byteOffset,
+        b.byteOffset + b.byteLength,
+      ) as ArrayBuffer);
+};
+
+export const modelFileCache = (dir: string) => ({
+  async match(key: string) {
+    const file = cachedFile(dir, key);
+    if (!file) return undefined;
+    const stat = await fs.promises.stat(file).catch(() => null);
+    if (!stat?.isFile()) return undefined;
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-length': String(stat.size) }),
+      arrayBuffer: () => readBytes(file),
+    };
+  },
+  async put(key: string, response: Response) {
+    const file = cachedFile(dir, key);
+    if (!file) return;
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    const part = `${file}.${process.pid}-${Date.now()}.part`;
+    try {
+      /* writeFile resolves after the file is closed. */
+      await fs.promises.writeFile(
+        part,
+        new Uint8Array(await response.arrayBuffer()),
+      );
+      await fs.promises.rename(part, file);
+    } catch (err) {
+      await fs.promises.rm(part, { force: true }).catch(() => {});
+      /* Another load put the same file there first: keep that one. */
+      if (!fs.existsSync(file)) throw err;
+    }
+  },
+});
+
+/* A model file that another program has locked (a virus scanner, a backup
+   tool) is read again after these waits: 7.75 s in all. Node reads the file
+   before onnxruntime makes a session, so a failed read does not leave a
+   failed session behind (point 2 above). */
 export const modelLoadRetry = { delaysMs: [250, 500, 1000, 2000, 4000] };
 
 export const isFileBusyError = (err: unknown): boolean => {
@@ -62,26 +129,6 @@ export const isFileBusyError = (err: unknown): boolean => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/* Windows only: true when nothing else has the file open (an exclusive open
-   works). That is stricter than the open onnxruntime does, so when it is
-   true, onnxruntime's open works too. Elsewhere files do not lock. */
-const fileIsFree = async (file: string): Promise<boolean> => {
-  const exclusive = (fs.constants as Record<string, number>).UV_FS_O_EXLOCK;
-  if (process.platform !== 'win32' || !exclusive) return true;
-  try {
-    const handle = await fs.promises.open(file, fs.constants.O_RDONLY | exclusive);
-    await handle.close();
-    return true;
-  } catch (err) {
-    return !isFileBusyError(err);
-  }
-};
-
-const waitUntilFree = async (file: string, maxMs: number) => {
-  const end = Date.now() + maxMs;
-  while (Date.now() < end && !(await fileIsFree(file))) await sleep(50);
-};
-
 export const loadWithRetry = async <T>(load: () => Promise<T>): Promise<T> => {
   const delays = modelLoadRetry.delaysMs;
   for (let attempt = 0; ; attempt++) {
@@ -94,10 +141,6 @@ export const loadWithRetry = async <T>(load: () => Promise<T>): Promise<T> => {
         `Embedding model file busy (try ${attempt + 1} of ${delays.length + 1}), trying again in ${wait} ms: ${err instanceof Error ? err.message : err}`,
       );
       await sleep(wait);
-      const busy = /Load model from (.+?) failed:/.exec(
-        err instanceof Error ? err.message : String(err),
-      );
-      if (busy) await waitUntilFree(busy[1], wait);
     }
   }
 };
@@ -119,8 +162,14 @@ export const loadEmbeddingPipeline = (
 
   const loading = loadWithRetry(async () => {
     const { pipeline, env } = await import('@huggingface/transformers');
-    const cacheDir = modelCacheDir();
-    if (cacheDir) env.cacheDir = cacheDir;
+    const cacheDir = modelCacheDir() ?? env.cacheDir;
+    if (cacheDir) {
+      env.cacheDir = cacheDir;
+      /* Off: transformers' own file cache, which hands onnxruntime a path. */
+      env.useFSCache = false;
+      env.useCustomCache = true;
+      env.customCache = modelFileCache(cacheDir);
+    }
     const result = await pipeline('feature-extraction', model, {
       dtype: 'fp32',
     });

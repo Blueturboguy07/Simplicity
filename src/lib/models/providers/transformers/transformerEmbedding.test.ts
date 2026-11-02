@@ -4,8 +4,14 @@ import path from 'path';
 /* The real onnxruntime is not loaded here: a fake pipeline records what the
    embedding class asks of the library. */
 const calls: string[][] = [];
-const env: { cacheDir?: string } = {};
-const realPipeline = async (_task: string, _model: string, _opts?: object) =>
+const env: {
+  cacheDir?: string;
+  useFSCache?: boolean;
+  useCustomCache?: boolean;
+  customCache?: { match: unknown; put: unknown };
+} = {};
+const realPipeline =
+  async (_task: string, _model: string, _opts?: object) =>
   async (texts: string[]) => {
     calls.push(texts);
     return { tolist: () => texts.map((t) => [t.length]) };
@@ -41,7 +47,13 @@ beforeEach(() => {
   calls.length = 0;
   pipeline.mockReset();
   pipeline.mockImplementation(realPipeline);
-  delete env.cacheDir;
+  for (const k of [
+    'cacheDir',
+    'useFSCache',
+    'useCustomCache',
+    'customCache',
+  ] as const)
+    delete env[k];
   modelLoadRetry.delaysMs = [1, 1, 1, 1, 1];
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -56,10 +68,21 @@ afterEach(() => {
 describe('TransformerEmbedding', () => {
   it('keeps models in DATA_DIR/models, never inside the app bundle', async () => {
     process.env.DATA_DIR = '/Users/x/Library/Application Support/Simplicity';
-    await new TransformerEmbedding({ model: 'Xenova/all-MiniLM-L6-v2' }).embedText(['a']);
+    await new TransformerEmbedding({
+      model: 'Xenova/all-MiniLM-L6-v2',
+    }).embedText(['a']);
     expect(env.cacheDir).toBe(
       path.join('/Users/x/Library/Application Support/Simplicity', 'models'),
     );
+  });
+
+  it("gives onnxruntime the model as bytes: transformers' file cache off, the Simplicity cache on", async () => {
+    process.env.DATA_DIR = '/Users/x/Library/Application Support/Simplicity';
+    await new TransformerEmbedding({ model: freshModel() }).embedText(['a']);
+    expect(env.useFSCache).toBe(false);
+    expect(env.useCustomCache).toBe(true);
+    expect(typeof env.customCache?.match).toBe('function');
+    expect(typeof env.customCache?.put).toBe('function');
   });
 
   it('leaves the library default alone when there is no DATA_DIR (dev, docker)', () => {
@@ -71,7 +94,9 @@ describe('TransformerEmbedding', () => {
 
   it('sends at most EMBED_BATCH_SIZE texts to onnxruntime per call and keeps the order', async () => {
     const texts = Array.from({ length: 300 }, (_, i) => 'x'.repeat(i + 1));
-    const out = await new TransformerEmbedding({ model: freshModel() }).embedText(texts);
+    const out = await new TransformerEmbedding({
+      model: freshModel(),
+    }).embedText(texts);
 
     expect(Math.max(...calls.map((c) => c.length))).toBe(EMBED_BATCH_SIZE);
     expect(calls).toHaveLength(Math.ceil(300 / EMBED_BATCH_SIZE));
@@ -99,20 +124,22 @@ describe('TransformerEmbedding', () => {
 
   it('first load on Windows: "system error number 13" once, then the load works', async () => {
     pipeline.mockRejectedValueOnce(busy());
-    const out = await new TransformerEmbedding({ model: freshModel() }).embedText(['abc']);
+    const out = await new TransformerEmbedding({
+      model: freshModel(),
+    }).embedText(['abc']);
     expect(out).toEqual([[3]]);
     expect(pipeline).toHaveBeenCalledTimes(2);
   });
 
   it('first load on Windows: EACCES twice, then the load works', async () => {
-    pipeline
-      .mockRejectedValueOnce(busy())
-      .mockRejectedValueOnce(
-        Object.assign(new Error("EACCES: permission denied, open 'model.onnx'"), {
-          code: 'EACCES',
-        }),
-      );
-    const out = await new TransformerEmbedding({ model: freshModel() }).embedText(['abcd']);
+    pipeline.mockRejectedValueOnce(busy()).mockRejectedValueOnce(
+      Object.assign(new Error("EACCES: permission denied, open 'model.onnx'"), {
+        code: 'EACCES',
+      }),
+    );
+    const out = await new TransformerEmbedding({
+      model: freshModel(),
+    }).embedText(['abcd']);
     expect(out).toEqual([[4]]);
     expect(pipeline).toHaveBeenCalledTimes(3);
   });
@@ -126,7 +153,9 @@ describe('TransformerEmbedding', () => {
     await expect(failed).rejects.toBeInstanceOf(ModelLoadError);
     const err = await failed.catch((e) => e);
     expect(err.message).toBe(MODEL_LOAD_FAILED_MESSAGE);
-    expect(err.message).toBe('Simplicity could not load its file model. Try the upload again.');
+    expect(err.message).toBe(
+      'Simplicity could not load its file model. Try the upload again.',
+    );
     expect(err.message).not.toMatch(/model\.onnx|simplicity-data|\\|\//);
     expect((err.cause as Error).message).toContain('system error number 13');
     /* first try + one per wait */
@@ -134,13 +163,17 @@ describe('TransformerEmbedding', () => {
 
     pipeline.mockReset();
     pipeline.mockImplementation(realPipeline);
-    await expect(new TransformerEmbedding({ model }).embedText(['ab'])).resolves.toEqual([[2]]);
+    await expect(
+      new TransformerEmbedding({ model }).embedText(['ab']),
+    ).resolves.toEqual([[2]]);
     expect(pipeline).toHaveBeenCalledTimes(1);
   });
 
   it('a failed load that is not a busy file is not retried in the same call, and not cached', async () => {
     const model = freshModel();
-    pipeline.mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND huggingface.co'));
+    pipeline.mockRejectedValueOnce(
+      new Error('getaddrinfo ENOTFOUND huggingface.co'),
+    );
     const e = new TransformerEmbedding({ model });
     const err = await e.embedText(['a']).catch((x) => x);
     expect(err).toBeInstanceOf(ModelLoadError);
@@ -158,7 +191,9 @@ describe('TransformerEmbedding', () => {
       .mockRejectedValueOnce(busy())
       .mockRejectedValueOnce(busy())
       .mockRejectedValueOnce(busy());
-    const done = new TransformerEmbedding({ model: freshModel() }).embedText(['a']);
+    const done = new TransformerEmbedding({ model: freshModel() }).embedText([
+      'a',
+    ]);
     await vi.advanceTimersByTimeAsync(0);
     expect(pipeline).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(249);
@@ -180,7 +215,12 @@ describe('isFileBusyError', () => {
     [Object.assign(new Error('x'), { code: 'EBUSY' }), true],
     [Object.assign(new Error('x'), { code: 'EPERM' }), true],
     [new Error('EBUSY: resource busy or locked, open model.onnx'), true],
-    [new Error('The process cannot access the file because it is being used by another process.'), true],
+    [
+      new Error(
+        'The process cannot access the file because it is being used by another process.',
+      ),
+      true,
+    ],
     [new Error('getaddrinfo ENOTFOUND huggingface.co'), false],
     [new Error('Load model from x failed:Protobuf parsing failed.'), false],
     [new Error('Load model from x failed:system error number 130'), false],
