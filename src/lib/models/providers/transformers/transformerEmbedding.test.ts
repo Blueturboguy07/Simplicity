@@ -1,4 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from 'vitest';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 /* The real onnxruntime is not loaded here: a fake pipeline records what the
@@ -9,7 +19,16 @@ const env: {
   useFSCache?: boolean;
   useCustomCache?: boolean;
   customCache?: { match: unknown; put: unknown };
-} = {};
+  remoteHost: string;
+  remotePathTemplate: string;
+} = {
+  remoteHost: 'https://huggingface.co/',
+  remotePathTemplate: '{model}/resolve/{revision}/',
+};
+/* No network in unit tests: the model file download gets a 404. */
+const fetchMock = vi.fn(
+  async (_url: string, _init?: object) => new Response(null, { status: 404 }),
+);
 const realPipeline =
   async (_task: string, _model: string, _opts?: object) =>
   async (texts: string[]) => {
@@ -55,6 +74,8 @@ beforeEach(() => {
   ] as const)
     delete env[k];
   modelLoadRetry.delaysMs = [1, 1, 1, 1, 1];
+  fetchMock.mockClear();
+  vi.stubGlobal('fetch', fetchMock);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -63,6 +84,7 @@ afterEach(() => {
   modelLoadRetry.delaysMs = [...defaultDelays];
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('TransformerEmbedding', () => {
@@ -83,6 +105,42 @@ describe('TransformerEmbedding', () => {
     expect(env.useCustomCache).toBe(true);
     expect(typeof env.customCache?.match).toBe('function');
     expect(typeof env.customCache?.put).toBe('function');
+  });
+
+  it('downloads the model file to disk first, then transformers loads it from the cache', async () => {
+    const saved = process.env.DATA_DIR;
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'simplicity-embed-'));
+    process.env.DATA_DIR = dataDir;
+    const model = freshModel();
+    const file = path.join(
+      dataDir,
+      'models',
+      ...model.split('/'),
+      'onnx',
+      'model.onnx',
+    );
+    fetchMock.mockImplementation(async (url: string) =>
+      url.endsWith('/onnx/model.onnx')
+        ? new Response(new Uint8Array([9, 8, 7]), { status: 200 })
+        : new Response(null, { status: 404 }),
+    );
+    let onDiskWhenLoaded = false;
+    pipeline.mockImplementation(async (...args) => {
+      onDiskWhenLoaded = fs.existsSync(file);
+      return realPipeline(...args);
+    });
+    try {
+      await new TransformerEmbedding({ model }).embedText(['a']);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe(
+        `https://huggingface.co/${model}/resolve/main/onnx/model.onnx`,
+      );
+      expect(onDiskWhenLoaded).toBe(true);
+      expect([...fs.readFileSync(file)]).toEqual([9, 8, 7]);
+    } finally {
+      process.env.DATA_DIR = saved;
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('leaves the library default alone when there is no DATA_DIR (dev, docker)', () => {
@@ -186,6 +244,12 @@ describe('TransformerEmbedding', () => {
   it('waits 0.25, 0.5, 1, 2, 4 s between tries by default', async () => {
     expect(defaultDelays).toEqual([250, 500, 1000, 2000, 4000]);
     modelLoadRetry.delaysMs = [...defaultDelays];
+    /* No model folder: no file I/O between the tries, only the waits. */
+    const saved = process.env.DATA_DIR;
+    delete process.env.DATA_DIR;
+    onTestFinished(() => {
+      process.env.DATA_DIR = saved;
+    });
     vi.useFakeTimers();
     pipeline
       .mockRejectedValueOnce(busy())

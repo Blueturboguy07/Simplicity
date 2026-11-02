@@ -21,7 +21,10 @@ const busy = () =>
 const realPipeline = async (_task: string, _model: string, _opts?: object) =>
   async (texts: string[]) => ({ tolist: () => texts.map(() => [0.1, 0.2, 0.3]) });
 const pipeline = vi.fn(realPipeline);
-const env: { cacheDir?: string } = {};
+const env: { cacheDir?: string; remoteHost: string; remotePathTemplate: string } = {
+  remoteHost: 'https://huggingface.co/',
+  remotePathTemplate: '{model}/resolve/{revision}/',
+};
 
 vi.mock('@huggingface/transformers', () => ({ pipeline, env }));
 
@@ -70,11 +73,14 @@ beforeEach(() => {
   modelLoadRetry.delaysMs = defaultDelays.map(() => 1);
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
+  /* No network in unit tests: the model file download gets a 404. */
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 404 })));
 });
 
 afterEach(() => {
   modelLoadRetry.delaysMs = [...defaultDelays];
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 afterAll(() => {

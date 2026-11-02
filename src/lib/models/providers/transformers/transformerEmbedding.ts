@@ -51,13 +51,13 @@ export class ModelLoadError extends Error {
    2. transformers.js keeps the first onnxruntime session promise of the
       process and waits on it before each later session, so after one failed
       first session every later load fails at once, until the app restarts.
-   So this cache keeps the models: a download goes to a .part file, which is
-   closed and then renamed into place; a cached model is read by Node (which
-   shares the file with other programs). transformers.js then gives
-   onnxruntime the model as bytes, and onnxruntime never opens the file. The
-   folders are the same as transformers' own cache
-   (<DATA_DIR>/models/<model>/<file>), so models that older versions
-   downloaded are used as they are.
+   So this cache keeps the models. A download is streamed to a .part file,
+   which is closed and then renamed into place. A cached file is given back
+   as a Response whose arrayBuffer() reads the file with Node (Node shares
+   the file with other programs), and transformers.js gives that to
+   onnxruntime as bytes: onnxruntime never opens the file. The folders are
+   the same as transformers' own cache (<DATA_DIR>/models/<model>/<file>),
+   so models that older versions downloaded are used as they are.
    Evidence: GitHub Actions runs 41424215347 and 41425843431. */
 const cachedFile = (dir: string, key: string): string | null => {
   /* transformers asks a custom cache for the remote URL:
@@ -69,40 +69,57 @@ const cachedFile = (dir: string, key: string): string | null => {
   return file.startsWith(base + path.sep) ? file : null;
 };
 
-const readBytes = async (file: string): Promise<ArrayBuffer> => {
-  const b = await fs.promises.readFile(file);
-  return b.byteOffset === 0 && b.byteLength === b.buffer.byteLength
-    ? (b.buffer as ArrayBuffer)
-    : (b.buffer.slice(
-        b.byteOffset,
-        b.byteOffset + b.byteLength,
-      ) as ArrayBuffer);
+/* What match() gives transformers.js for a file on disk. transformers reads
+   it with arrayBuffer() only; the file is opened then, not before. */
+export class CachedModelFile extends Response {
+  constructor(
+    readonly file: string,
+    size: number,
+  ) {
+    super(null, { status: 200, headers: { 'content-length': String(size) } });
+  }
+
+  override async arrayBuffer(): Promise<ArrayBuffer> {
+    const b = await fs.promises.readFile(this.file);
+    return b.byteOffset === 0 && b.byteLength === b.buffer.byteLength
+      ? (b.buffer as ArrayBuffer)
+      : (b.buffer.slice(
+          b.byteOffset,
+          b.byteOffset + b.byteLength,
+        ) as ArrayBuffer);
+  }
+}
+
+const writeAll = async (out: fs.promises.FileHandle, chunk: Uint8Array) => {
+  for (let done = 0; done < chunk.length; ) {
+    done += (await out.write(chunk, done, chunk.length - done)).bytesWritten;
+  }
 };
 
 export const modelFileCache = (dir: string) => ({
-  async match(key: string) {
+  async match(key: string): Promise<CachedModelFile | undefined> {
     const file = cachedFile(dir, key);
     if (!file) return undefined;
     const stat = await fs.promises.stat(file).catch(() => null);
-    if (!stat?.isFile()) return undefined;
-    return {
-      ok: true,
-      status: 200,
-      headers: new Headers({ 'content-length': String(stat.size) }),
-      arrayBuffer: () => readBytes(file),
-    };
+    return stat?.isFile() ? new CachedModelFile(file, stat.size) : undefined;
   },
-  async put(key: string, response: Response) {
+  /* Writes the body as it arrives, waits for the close, then renames. */
+  async put(key: string, response: Response): Promise<void> {
     const file = cachedFile(dir, key);
     if (!file) return;
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
     const part = `${file}.${process.pid}-${Date.now()}.part`;
     try {
-      /* writeFile resolves after the file is closed. */
-      await fs.promises.writeFile(
-        part,
-        new Uint8Array(await response.arrayBuffer()),
-      );
+      const out = await fs.promises.open(part, 'w');
+      try {
+        if (response.body) {
+          for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+            await writeAll(out, chunk);
+          }
+        }
+      } finally {
+        await out.close();
+      }
       await fs.promises.rename(part, file);
     } catch (err) {
       await fs.promises.rm(part, { force: true }).catch(() => {});
@@ -111,6 +128,31 @@ export const modelFileCache = (dir: string) => ({
     }
   },
 });
+
+/* The model file that pipeline(..., { dtype: 'fp32' }) loads. */
+const MODEL_FILE = 'onnx/model.onnx';
+
+/* With its file cache off, transformers.js holds a download in memory two or
+   three times before it reaches put() (3.8 GB at the peak for the 548 MB
+   nomic-embed-text-v1 under Electron). So the model file is downloaded here
+   first and written to disk as it arrives; transformers then finds it in the
+   cache and reads it once. If this download fails, transformers downloads
+   the file itself. */
+export const downloadModelFile = async (
+  cache: ReturnType<typeof modelFileCache>,
+  url: string,
+): Promise<void> => {
+  if (await cache.match(url)) return;
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (res.ok) await cache.put(url, res);
+    else await res.body?.cancel();
+  } catch (err) {
+    console.warn(
+      `Model file download failed (${err instanceof Error ? err.message : err}); transformers.js tries again`,
+    );
+  }
+};
 
 /* A model file that another program has locked (a virus scanner, a backup
    tool) is read again after these waits: 7.75 s in all. Node reads the file
@@ -165,10 +207,17 @@ export const loadEmbeddingPipeline = (
     const cacheDir = modelCacheDir() ?? env.cacheDir;
     if (cacheDir) {
       env.cacheDir = cacheDir;
-      /* Off: transformers' own file cache, which hands onnxruntime a path. */
+      /* Off: transformers' own file cache, which gives onnxruntime a path. */
       env.useFSCache = false;
       env.useCustomCache = true;
-      env.customCache = modelFileCache(cacheDir);
+      const cache = modelFileCache(cacheDir);
+      env.customCache = cache;
+      await downloadModelFile(
+        cache,
+        `${env.remoteHost}${env.remotePathTemplate
+          .replaceAll('{model}', model)
+          .replaceAll('{revision}', 'main')}${MODEL_FILE}`,
+      );
     }
     const result = await pipeline('feature-extraction', model, {
       dtype: 'fp32',
