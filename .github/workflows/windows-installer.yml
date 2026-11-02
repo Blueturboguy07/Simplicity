@@ -258,3 +258,28 @@ jobs:
             model-load-race-*.log
             server-race-*.log
           if-no-files-found: warn
+
+  # THROWAWAY (branch probe/lock-diag only): who holds model.onnx while loads fail.
+  lock-diag:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+      - name: yarn build:desktop (up to 3 tries)
+        shell: pwsh
+        run: |
+          foreach ($i in 1..3) { yarn build:desktop; if ($LASTEXITCODE -eq 0) { exit 0 }; Start-Sleep -Seconds 30 }
+          exit 1
+      - name: Diag, write handle held 3 s
+        shell: pwsh
+        run: ./scripts/ci/lock-diag.ps1 -HoldMs 3000 -Tag diag-hold3
+      - name: Diag, natural first loads x6
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          foreach ($i in 1..6) { ./scripts/ci/lock-diag.ps1 -HoldMs 0 -Tag "diag-nat$i" }
+
