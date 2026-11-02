@@ -28,6 +28,11 @@ name: windows-installer
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_build:
+        description: 'Skip the installer build (run only the upload smoke and the model-load race checks)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -37,7 +42,7 @@ jobs:
     # bugfix-lab scaffolding: skip ONLY on the lab branch, so the oracle's
     # dispatches don't also build a release installer. Every other ref --
     # `desktop`, a tag, a real fix branch -- is unaffected.
-    if: ${{ github.ref_name != 'fix/simplicity-free-tier-api-key-confusion-mac-win' }}
+    if: ${{ github.ref_name != 'fix/simplicity-free-tier-api-key-confusion-mac-win' && !inputs.skip_build }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -173,4 +178,53 @@ jobs:
           path: |
             upload-smoke-*.log
             server-*.log
+          if-no-files-found: warn
+
+  # The first embedding-model load on a fresh Windows install. v0.1.5 failed
+  # it 1 time in 11 on these runners (run 41408225083): 500 "Upload failed:
+  # Load model from ...\model.onnx failed:system error number 13", because
+  # transformers.js hands the model path to onnxruntime before the download's
+  # write handle is closed. probe: hold-model-file.cjs keeps that handle open
+  # (3 s, then 40 s) so the race happens every time; stress: the real first
+  # load, each round with a new DATA_DIR and server (scripts/ci/model-load-race.ps1).
+  model-load-race:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: yarn build:desktop
+
+      - name: Model file held open on the first load, plain node
+        shell: pwsh
+        run: ./scripts/ci/model-load-race.ps1 -Runtime node -Mode probe
+
+      - name: Model file held open on the first load, Electron runtime
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: ./scripts/ci/model-load-race.ps1 -Runtime electron -Mode probe
+
+      - name: Real first load, 8 fresh installs, plain node
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: ./scripts/ci/model-load-race.ps1 -Runtime node -Mode stress -Rounds 8
+
+      - name: Real first load, 8 fresh installs, Electron runtime
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: ./scripts/ci/model-load-race.ps1 -Runtime electron -Mode stress -Rounds 8
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: model-load-race-evidence
+          path: |
+            model-load-race-*.log
+            server-race-*.log
           if-no-files-found: warn
