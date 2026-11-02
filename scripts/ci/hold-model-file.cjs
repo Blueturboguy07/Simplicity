@@ -7,28 +7,23 @@
 // onnxruntime, which opens it "deny others write" and failed with
 // "system error number 13" while any other handle could still write the file.
 //
-// Here a second handle is opened on model.onnx as soon as the file exists and
-// is kept open SIMPLICITY_CI_HOLD_MODEL_MS:
-//   SIMPLICITY_CI_HOLD_MODE=write      read+write, shared like Node's own
-//                                      handles (the open write stream of
-//                                      v0.1.5, or a slow writer);
-//   SIMPLICITY_CI_HOLD_MODE=exclusive  shares nothing, so no other open of
-//                                      the file works until it is released.
+// Here a second read+write handle (shared like Node's own handles: the open
+// write stream of v0.1.5, or any slow writer) is opened on model.onnx as soon
+// as the file exists and is kept open SIMPLICITY_CI_HOLD_MODEL_MS.
+// (An exclusive lock is taken by model-load-race.ps1 itself with .NET
+// FileShare.None: Node cannot open a file without sharing.)
 'use strict';
 const fs = require('fs');
 const path = require('path');
 
 const holdMs = Number(process.env.SIMPLICITY_CI_HOLD_MODEL_MS || 0);
-const mode = process.env.SIMPLICITY_CI_HOLD_MODE === 'exclusive' ? 'exclusive' : 'write';
+const mode = 'write';
 const dataDir = process.env.DATA_DIR || '';
 
 if (holdMs > 0 && dataDir) {
   const log = (text) => process.stderr.write(`[ci-hold] ${text}\n`);
   const file = path.join(dataDir, 'models', 'Xenova', 'all-MiniLM-L6-v2', 'onnx', 'model.onnx');
-  const flags =
-    mode === 'exclusive'
-      ? fs.constants.O_RDONLY | (fs.constants.UV_FS_O_EXLOCK || 0)
-      : fs.constants.O_RDWR;
+  const flags = fs.constants.O_RDWR;
   const timer = setInterval(() => {
     let fd;
     try {
