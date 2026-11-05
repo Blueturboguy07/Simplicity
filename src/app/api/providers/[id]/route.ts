@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import configManager from '@/lib/config';
 import { ConfigModelProvider } from '@/lib/config/types';
 import { declinePublik } from '@/lib/publik/provision';
+import { maskProviderConfig, mergeSecretConfig } from '@/lib/config/secrets';
 
 export const DELETE = async (
   req: NextRequest,
@@ -76,13 +77,24 @@ export const PATCH = async (
       );
     }
 
+    /* Settings shows a stored key masked and sends the field back empty
+       or still masked when the user did not change it: keep the stored
+       key in that case instead of saving the mask over it. */
+    const existing = (
+      configManager.getConfig('modelProviders', []) as ConfigModelProvider[]
+    ).find((p) => p.id === id);
+    const merged =
+      existing && config && typeof config === 'object'
+        ? mergeSecretConfig(existing.type, existing.config, config)
+        : config;
+
     const registry = new ModelRegistry();
 
-    const updatedProvider = await registry.updateProvider(id, name, config);
+    const updatedProvider = await registry.updateProvider(id, name, merged);
 
     return Response.json(
       {
-        provider: updatedProvider,
+        provider: maskProviderConfig(updatedProvider),
       },
       {
         status: 200,
