@@ -1,5 +1,6 @@
 import ModelRegistry from '@/lib/models/registry';
 import { NextRequest } from 'next/server';
+import { maskProviderConfig } from '@/lib/config/secrets';
 
 export const GET = async (req: Request) => {
   try {
@@ -54,7 +55,8 @@ export const POST = async (req: NextRequest) => {
 
     return Response.json(
       {
-        provider: newProvider,
+        /* the key the user just typed is never echoed back */
+        provider: maskProviderConfig(newProvider),
       },
       {
         status: 200,

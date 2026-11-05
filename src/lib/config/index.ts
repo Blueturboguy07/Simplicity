@@ -3,6 +3,7 @@ import fs from 'fs';
 import { Config, ConfigModelProvider, UIConfigSections } from './types';
 import { hashObj } from '../utils/hash';
 import { getModelProvidersUIConfigSection } from '../models/providers';
+import { isSafeConfigPath } from './path';
 
 class ConfigManager {
   configPath: string = path.join(
@@ -268,6 +269,7 @@ class ConfigManager {
   }
 
   public getConfig(key: string, defaultValue?: any): any {
+    if (!isSafeConfigPath(key)) return defaultValue;
     const nested = key.split('.');
     let obj: any = this.currentConfig;
 
@@ -282,6 +284,11 @@ class ConfigManager {
   }
 
   public updateConfig(key: string, val: any) {
+    /* Throw rather than ignore: a caller passing __proto__ is a bug or an
+       attack, and the route turns this into a 400 before we get here. */
+    if (!isSafeConfigPath(key)) {
+      throw new Error('Invalid config key.');
+    }
     const parts = key.split('.');
     if (parts.length === 0) return;
 

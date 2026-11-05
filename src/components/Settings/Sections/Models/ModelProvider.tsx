@@ -7,6 +7,7 @@ import ProviderLogo from '@/components/ui/ProviderLogo';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { isMaskedSecret, maskedTail } from '@/lib/config/secretMask';
 import DeleteProvider from './DeleteProviderDialog';
 import { usePublikStatus } from '@/lib/hooks/usePublikStatus';
 import { StatusLine } from '@/components/Setup/PublikCard';
@@ -32,6 +33,10 @@ const ModelProvider = ({
   setProviders: React.Dispatch<React.SetStateAction<ConfigModelProvider[]>>;
 }) => {
   const [config, setConfig] = useState<Record<string, any>>({});
+  /* Keys arrive masked (GET /api/config never returns one in clear text).
+     A masked field starts empty with a "set, ends in …" hint; saving it
+     empty keeps the stored key on the server. */
+  const [maskedHints, setMaskedHints] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   /* publik is provisioned, not pasted: its key is shown masked and
      read-only, there is no Save, and the card carries the balance line.
@@ -45,11 +50,22 @@ const ModelProvider = ({
        card before anything was ever saved. */
     const stored = modelProvider.config ?? {};
     const initial: Record<string, any> = {};
+    const hints: Record<string, string> = {};
     fields.forEach((field) => {
-      initial[field.key] = stored[field.key] ?? field.default ?? '';
+      const value = stored[field.key];
+      if (field.type === 'password' && isMaskedSecret(value) && !isPublik) {
+        const tail = maskedTail(value);
+        hints[field.key] = tail
+          ? `Set, ends in …${tail}. Leave empty to keep it.`
+          : 'Set. Leave empty to keep it.';
+        initial[field.key] = '';
+      } else {
+        initial[field.key] = value ?? field.default ?? '';
+      }
     });
     setConfig(initial);
-  }, [fields, modelProvider.config]);
+    setMaskedHints(hints);
+  }, [fields, modelProvider.config, isPublik]);
 
   const handleSave = async () => {
     setLoading(true);
@@ -152,7 +168,10 @@ const ModelProvider = ({
                   }))
                 }
                 className="w-full rounded-lg border border-light-200 dark:border-dark-200 bg-light-primary dark:bg-dark-primary px-4 py-3 text-[13px] text-black/80 dark:text-white/80 placeholder:text-black/40 dark:placeholder:text-white/40 focus-visible:outline-none focus-visible:border-light-300 dark:focus-visible:border-dark-300 transition-colors disabled:cursor-not-allowed disabled:opacity-60"
-                placeholder={(field as StringUIConfigField).placeholder}
+                placeholder={
+                  maskedHints[field.key] ??
+                  (field as StringUIConfigField).placeholder
+                }
                 type={field.type === 'password' ? 'password' : 'text'}
                 required={field.required}
                 readOnly={isPublik}

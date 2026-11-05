@@ -149,6 +149,11 @@ async function startServer() {
       DATA_DIR: dataDir(),
       PORT: String(port),
       HOSTNAME: '127.0.0.1',
+      /* Turns on the loopback-Host rule in the /api guard (src/proxy.ts): this
+         server is reachable from any page in the user's browser, so only
+         same-origin loopback requests may touch it. The web (Docker) build
+         never sets this and keeps its normal cross-host behaviour. */
+      SIMPLICITY_DESKTOP: '1',
       ...publikEnv(),
     },
     /* Send the child's output to a log rather than discarding it — a packaged

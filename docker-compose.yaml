@@ -5,6 +5,11 @@ services:
       context: .
     ports:
       - '3000:3000'
+    # Domain names this instance is served under (loopback names and IP
+    # addresses always work). Required for any domain name; see README
+    # "Self-hosting the web build".
+    # environment:
+    #   - SIMPLICITY_ALLOWED_HOSTS=search.example.com
     volumes:
       - data:/home/vane/data
     restart: unless-stopped

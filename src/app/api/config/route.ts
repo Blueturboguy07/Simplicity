@@ -2,6 +2,8 @@ import configManager from '@/lib/config';
 import ModelRegistry from '@/lib/models/registry';
 import { NextRequest, NextResponse } from 'next/server';
 import { ConfigModelProvider } from '@/lib/config/types';
+import { maskProviderConfig } from '@/lib/config/secrets';
+import { isSafeConfigPath } from '@/lib/config/path';
 
 type SaveConfigBody = {
   key: string;
@@ -21,21 +23,11 @@ export const GET = async (req: NextRequest) => {
         const activeProvider = modelProviders.find((p) => p.id === mp.id);
 
         return {
-          ...mp,
-          /* The publik key is provisioned, read-only in Settings, and never
-             edited from the renderer — only its public 12-char id crosses
-             the local HTTP boundary. BYO keys are the user's own and stay
-             editable exactly as before. */
-          config:
-            mp.type === 'publik' && typeof mp.config?.apiKey === 'string'
-              ? {
-                  ...mp.config,
-                  apiKey: mp.config.apiKey.replace(
-                    /^(pk_(?:live|test)_[a-z0-9]{12})_[a-z0-9]+$/,
-                    '$1_••••••••',
-                  ),
-                }
-              : mp.config,
+          /* No key crosses the local HTTP boundary in clear text: the publik
+             key keeps only its public 12-char id, a BYO key only its last
+             four characters. Settings saves an empty or masked field as
+             "keep the stored key" (PATCH /api/providers/[id]). */
+          ...maskProviderConfig(mp),
           chatModels: activeProvider?.chatModels ?? mp.chatModels,
           embeddingModels:
             activeProvider?.embeddingModels ?? mp.embeddingModels,
@@ -59,6 +51,12 @@ export const GET = async (req: NextRequest) => {
 export const POST = async (req: NextRequest) => {
   try {
     const body: SaveConfigBody = await req.json();
+
+    /* Dotted keys are walked over the config object; __proto__,
+       constructor and prototype would walk onto Object.prototype. */
+    if (body?.key && !isSafeConfigPath(body.key)) {
+      return Response.json({ message: 'Invalid config key.' }, { status: 400 });
+    }
 
     if (!body.key || !body.value) {
       return Response.json(

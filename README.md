@@ -54,6 +54,26 @@ yarn dist:mac   # or: yarn dist:win
 
 Requires Node 24+. Development: `yarn dev`, tests: `yarn test`.
 
+## Self-hosting the web build (Docker)
+
+`docker compose up` serves the same app as a website on port 3000. Its API holds your keys, so it only answers requests addressed to a host it trusts — this stops a malicious page in your browser from reaching it through DNS rebinding.
+
+- **Loopback names and IP addresses always work:** `http://localhost:3000`, `http://127.0.0.1:3000`, `http://192.168.1.20:3000`.
+- **A domain name must be listed** in `SIMPLICITY_ALLOWED_HOSTS` (comma-separated; add `:port` to allow one port only):
+
+  ```yaml
+  services:
+    vane:
+      environment:
+        - SIMPLICITY_ALLOWED_HOSTS=search.example.com,nas.lan:3000
+  ```
+
+  Without it, API calls under that name fail with `403` and a message that names this variable.
+
+- **Behind a reverse proxy**, either pass the original `Host` through (Caddy and Traefik do by default; nginx: `proxy_set_header Host $host;`) or send `X-Forwarded-Host` and `X-Forwarded-Proto` (nginx: `proxy_set_header X-Forwarded-Host $host;` and `proxy_set_header X-Forwarded-Proto $scheme;`). The public name in either header must be in `SIMPLICITY_ALLOWED_HOSTS`. A proxy that rewrites `Host` and sends neither header (bare nginx `proxy_pass`) breaks saving settings and searching.
+
+The desktop app ignores `SIMPLICITY_ALLOWED_HOSTS`: its local server only ever answers its own window on `127.0.0.1`.
+
 ## Credits & license
 
 Simplicity is a fork of [Vane](https://github.com/ItzCrazyKns/Vane) by [ItzCrazyKns](https://github.com/ItzCrazyKns) (the successor to Perplexica) — an excellent foundation, rebuilt here as a desktop app with a search-first retrieval pipeline, model council, cost tracking, and the rest of the feature set above. [MIT licensed](LICENSE), same as upstream.
