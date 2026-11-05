@@ -27,8 +27,10 @@ class ModelRegistry {
           provider: createProviderInstance(provider, p.id, p.name, p.config),
         });
       } catch (err) {
+        /* Never log p.config: it holds the provider's API key, and this line
+           lands in the user-readable desktop log (userData/logs). */
         console.error(
-          `Failed to initialize provider. Type: ${p.type}, ID: ${p.id}, Config: ${JSON.stringify(p.config)}, Error: ${err}`,
+          `Failed to initialize provider. Type: ${p.type}, ID: ${p.id}, Error: ${err}`,
         );
       }
     });
