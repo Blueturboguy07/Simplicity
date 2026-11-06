@@ -29,7 +29,9 @@ concurrency:
 
 jobs:
   mac:
-    runs-on: macos-14
+    # arm64. (macos-14, the label in release.yml, was refused on Nov 6 2026:
+    # "The configuration 'macos-14-arm64-us-default' is not supported".)
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
