@@ -1,0 +1,203 @@
+name: publik build
+
+# Builds the downloads of a publik release with the same commands as
+# release.yml and uploads them as workflow ARTIFACTS:
+#   - macOS arm64: Simplicity.app, NOT signed here (this repo holds no Apple
+#     secrets), packed with ditto. A Mac that holds the Developer ID signs it,
+#     notarizes it and packs it into Simplicity-mac-arm64.dmg.
+#   - Windows x64: Simplicity-Setup-Windows.exe (unsigned, as every release
+#     so far).
+#
+# It NEVER creates, changes or publishes a GitHub Release. The files are
+# checked by hand and attached to a draft release by hand.
+#
+# Both jobs start the built app against a listener on the runner and fail
+# when the usage-count request is wrong (.github/scripts/publik-telemetry-smoke.cjs).
+
+on:
+  push:
+    branches:
+      - 'telemetry/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publik-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      # `yarn dist:mac` without the dmg: the dmg is made after signing.
+      # next/font downloads Google Fonts during the build; that sometimes
+      # fails on a runner, so the build gets up to 3 tries.
+      - name: Build Simplicity.app (ad-hoc signature only)
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PUBLIK_APP_TOKEN:-}" ]; then
+            echo "::error::PUBLIK_APP_TOKEN is not set: the build would ship without publik API."
+            exit 1
+          fi
+          built=0
+          for try in 1 2 3; do
+            if yarn build:desktop; then built=1; break; fi
+            echo "build:desktop failed (try $try of 3)"
+            sleep 30
+          done
+          [ "$built" = 1 ]
+          yarn electron-builder --mac dir --arm64
+
+      - name: Assert the publik token is in the bundle and not in the client bundle
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          set -euo pipefail
+          app="release/mac-arm64/Simplicity.app/Contents/Resources/.next/standalone"
+          test -s "$app/publik-app.json"
+          if grep -rqF "$PUBLIK_APP_TOKEN" "$app/.next/static"; then
+            echo "publik app token leaked into the client bundle" >&2
+            exit 1
+          fi
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' release/mac-arm64/Simplicity.app/Contents/Info.plist
+          du -sh release/mac-arm64/Simplicity.app
+
+      # Packed BEFORE the app is started, so the artifact is the app as built.
+      # ditto keeps the symbolic links of the frameworks.
+      - name: Pack the app
+        run: ditto -c -k --keepParent release/mac-arm64/Simplicity.app Simplicity-mac-arm64-unsigned.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Simplicity-mac-arm64-UNSIGNED-app
+          path: Simplicity-mac-arm64-unsigned.app.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Usage-count test of the built app
+        run: node .github/scripts/publik-telemetry-smoke.cjs release/mac-arm64/Simplicity.app/Contents/MacOS/Simplicity publik-telemetry-smoke-mac.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publik-telemetry-smoke-mac
+          path: publik-telemetry-smoke-mac.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - run: yarn test
+
+      # `yarn dist:win` in two steps, so that the flaky next/font download
+      # (see windows-installer.yml) gets up to 3 tries.
+      - name: yarn build:desktop (up to 3 tries)
+        shell: pwsh
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          if (-not $env:PUBLIK_APP_TOKEN) { throw "PUBLIK_APP_TOKEN secret is not set - refusing to build a release exe without it" }
+          foreach ($i in 1..3) {
+            yarn build:desktop
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "build:desktop failed (try $i of 3)"
+            Start-Sleep -Seconds 30
+          }
+          exit 1
+
+      - name: Build the installer (unsigned)
+        run: yarn electron-builder --win
+
+      - name: Assert the publik token is in the payload and not in the client bundle
+        shell: pwsh
+        env:
+          PUBLIK_APP_TOKEN: ${{ secrets.PUBLIK_APP_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $standalone = Join-Path $PWD '.next\standalone'
+          if (!(Test-Path (Join-Path $standalone 'publik-app.json'))) { throw "publik-app.json missing from the standalone payload" }
+          $leak = Get-ChildItem -Recurse -File (Join-Path $standalone '.next\static') | Select-String -SimpleMatch -Pattern $env:PUBLIK_APP_TOKEN -List
+          if ($leak) { throw "publik app token leaked into the client bundle" }
+          if (!(Test-Path 'release\Simplicity-Setup-Windows.exe')) { throw "installer was not produced" }
+          Get-FileHash 'release\Simplicity-Setup-Windows.exe' -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Simplicity-Setup-Windows
+          path: release/Simplicity-Setup-Windows.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      # The same install + uninstall check as windows-installer.yml, with the
+      # usage-count test of the INSTALLED app in the middle.
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $PWD 'release\Simplicity-Setup-Windows.exe'
+          Start-Process -FilePath $setup -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity'
+          if (!(Test-Path (Join-Path $dir 'Simplicity.exe'))) { throw "Simplicity.exe missing after install" }
+          $resources = Join-Path $dir 'resources\.next\standalone'
+          if (!(Test-Path (Join-Path $resources 'server.js'))) { throw "standalone server missing after install" }
+          $canvasWin = Get-ChildItem -Recurse -Filter '*.node' (Join-Path $resources 'node_modules') |
+            Where-Object { $_.Name -match 'win32' -or $_.FullName -match 'win32' }
+          if (-not $canvasWin) { throw "no win32 native modules in the bundle - cross-build regression" }
+
+      - name: Usage-count test of the installed app
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity\Simplicity.exe'
+          node .github/scripts/publik-telemetry-smoke.cjs "$exe" publik-telemetry-smoke-windows.json
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: publik-telemetry-smoke-windows
+          path: publik-telemetry-smoke-windows.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Uninstall silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity'
+          $un = Join-Path $dir 'Uninstall Simplicity.exe'
+          if (!(Test-Path $un)) { throw "uninstaller missing after install" }
+          Start-Process -FilePath $un -ArgumentList '/S' -Wait
+
+          # A /S uninstall hands off to a temp copy and returns early - poll.
+          $gone = $false
+          foreach ($i in 1..12) {
+            Start-Sleep -Seconds 5
+            if (!(Test-Path (Join-Path $dir 'Simplicity.exe'))) { $gone = $true; break }
+          }
+          if (-not $gone) { throw "uninstaller ran but Simplicity.exe is still present" }
+          Write-Host "install + uninstall both clean"

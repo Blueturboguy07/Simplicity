@@ -1,5 +1,8 @@
 # Tag-triggered packaged builds with the publik app token baked in.
 #
+# Exception (job `guard`): when the release for the tag already holds files,
+# this workflow builds nothing and uploads nothing.
+#
 # The tag BUILDS; it does not publish. Create a DRAFT release for the tag
 # first (`gh release create vX.Y.Z --draft ...`), push the tag, let both
 # jobs upload into the draft, open the DMG on a Mac, then press Publish —
@@ -26,7 +29,43 @@ permissions:
   contents: write
 
 jobs:
+  # A release that already holds files is never built again by its tag.
+  # A publik release is built by publik-build.yml, checked on a Mac and
+  # attached to a DRAFT by hand. When that draft is published, GitHub creates
+  # the tag and this workflow starts. Without this job it would build a new
+  # exe and put it in place of the checked one (`--clobber` below).
+  # A draft with no files (the flow in the header) builds as before.
+  # If the check itself fails, nothing is built.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/tags/* ]]; then
+            echo "Not a tag: build (workflow artifacts only)."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          counts="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .assets | length")"
+          files=0
+          for n in $counts; do files=$((files + n)); done
+          if [ "$files" -gt 0 ]; then
+            echo "::notice::The release for $GITHUB_REF_NAME already holds $files file(s). No build, no upload."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "The release for $GITHUB_REF_NAME holds no files: build."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   windows:
+    needs: guard
+    if: needs.guard.outputs.build == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +108,8 @@ jobs:
           if-no-files-found: error
 
   mac:
+    needs: guard
+    if: needs.guard.outputs.build == 'true'
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
