@@ -21,6 +21,12 @@ The first run downloads the local search engine (~150 MB on macOS, ~1.4 GB on Wi
 
 **Packaged builds (the DMG / EXE from Releases) also ship with publik API as the default provider.** On first run the setup screen shows a short disclosure — every request is priced per use at 50% of the model's published list price from your publik balance (most people spend under $2 a month), and your questions go through publik's servers to a shared model account — with **Continue with publik API** and **Use my own key instead** side by side. Nothing is sent until you continue. You can remove the publik connection from Settings → Models at any time and use any of the providers above instead; builds from source and Docker have no publik token and behave exactly as before.
 
+### Usage counts
+
+The packaged apps (the DMG / EXE from Releases) send two anonymous usage events to publik: `app_opened` at each start, and `active_session` every 30 minutes while the app runs. An event holds the app name (`simplicity`), the app version, the operating system, the CPU type and a random install ID. If you use publik API, the event also carries your publik key, so that publik counts you one time. Nothing else is sent: no searches, no chats, no files, no API keys of other providers.
+
+To turn it off, set `DO_NOT_TRACK=1` (or `PUBLIK_TELEMETRY=0`) in the environment before you start Simplicity. Details: <https://publikhq.com/skills/telemetry.md>. Docker and `yarn dev` do not send these events.
+
 ### Uninstalling
 
 See [UNINSTALL.md](UNINSTALL.md) for exactly what Simplicity writes to disk and how to remove all of it — on macOS, `./scripts/uninstall.sh` does it in one step.
@@ -41,7 +47,7 @@ This is an early beta — a starting point. The core loop (search → sources �
 - **Your models, your choice** — pick per message: local Ollama (free), your Claude plan (free), or GPT-5.1 / Gemini 2.5 Pro / Claude Opus 4.8 / Grok on your keys. Nothing is locked.
 - **Incognito threads** — flip the lock and the thread is never written to disk.
 - **Export** — Markdown, PDF, or CSV of any answer.
-- **Private by construction** — searches run through your local metasearch, chats live in a local SQLite file, API keys stay on your device. There is no server of ours to send anything to.
+- **Private by construction** — searches run through your local metasearch, chats live in a local SQLite file, API keys stay on your device. The packaged apps send anonymous [usage counts](#usage-counts) and nothing else.
 
 ## Build from source
 

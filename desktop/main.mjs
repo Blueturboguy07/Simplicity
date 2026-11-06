@@ -17,6 +17,7 @@
 import { app, BrowserWindow, dialog, shell } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,6 +25,10 @@ import * as searxng from './searxng.mjs';
 import { pickServerPort } from './serverPort.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/* publik usage counts: "app opened" and "active session" (README, "Usage
+   counts"). The client runs in this process only, never in the window. */
+const telemetry = createRequire(import.meta.url)('./publik-telemetry.cjs');
 
 let mainWindow = null;
 let serverProc = null;
@@ -110,6 +115,22 @@ function publikEnv() {
     };
   } catch {
     return {};
+  }
+}
+
+/* The publik key of this install for the usage counts, or null when there is
+   no publik connection. It is the key the server already keeps in
+   data/config.json (modelProviders[], type "publik"). Read before each send,
+   so a connect or a disconnect during a run is picked up. Keys of other
+   providers are never returned. */
+async function publikKey() {
+  try {
+    const file = path.join(dataDir(), 'data', 'config.json');
+    const config = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    const provider = (config.modelProviders ?? []).find((p) => p?.type === 'publik');
+    return provider?.config?.apiKey ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -325,7 +346,11 @@ async function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  /* Returns at once: the send runs in the background and never throws. */
+  telemetry.start('simplicity', app.getVersion(), publikKey);
+  return createWindow();
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();

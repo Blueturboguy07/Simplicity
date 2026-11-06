@@ -31,6 +31,13 @@ Inside it:
 - `searxng/` — the local search engine: a self-contained Python runtime plus the SearXNG source, downloaded once on first launch (~150 MB)
 - `logs/` — `simplicity.log` and `searxng.log`, plain text, useful for bug reports
 
+One small file lives outside that folder: `telemetry.json`, the random install
+ID for the anonymous [usage counts](README.md#usage-counts). It is in
+`~/Library/Application Support/publik` (macOS) or `%LOCALAPPDATA%\publik`
+(Windows). Other publik apps on this computer share the file, so
+`scripts/uninstall.sh` leaves it in place. Delete the `publik` folder by hand
+if no other publik app is installed.
+
 Nothing here is a login item, background service, or system daemon —
 Simplicity doesn't register anything to run at startup, so there's nothing to
 disable before removing files, on either OS.
