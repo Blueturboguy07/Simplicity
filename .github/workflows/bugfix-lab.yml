@@ -5,6 +5,10 @@ name: bugfix-lab
 on:
   workflow_dispatch:
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   repro:
     runs-on: windows-latest

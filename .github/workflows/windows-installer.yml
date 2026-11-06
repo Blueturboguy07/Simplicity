@@ -37,6 +37,10 @@ on:
 permissions:
   contents: read
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   build:
     # bugfix-lab scaffolding: skip ONLY on the lab branch, so the oracle's

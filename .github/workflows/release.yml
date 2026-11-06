@@ -28,6 +28,10 @@ on:
 permissions:
   contents: write
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   # A release that already holds files is never built again by its tag.
   # A publik release is built by publik-build.yml, checked on a Mac and

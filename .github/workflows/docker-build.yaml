@@ -8,6 +8,10 @@ on:
   release:
     types: [published]
 
+# publik telemetry is off on build machines: a test run is not a user.
+env:
+  DO_NOT_TRACK: "1"
+
 jobs:
   build-amd64:
     runs-on: ubuntu-latest
