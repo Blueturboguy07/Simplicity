@@ -8,16 +8,18 @@
 # Every request is one JSON line in the log: {method, url, authorization: present|absent, body}.
 #
 # usage: python3 publik-fake.py <port> <log.jsonl> <claim_state: claimed|anonymous>
-import http.server, json, sys
+import http.server, json, re, sys
 
 PORT, LOG, CLAIM = int(sys.argv[1]), sys.argv[2], sys.argv[3]
 KEY = "pk_live_cleanrunner0000_00000000000000000000000000000000"  # a fake key for this fake publik
+# The installs body carries the app token of the build. The log (an artifact) keeps only its prefix.
+REDACT = re.compile(r"pat_[A-Za-z0-9_]+")
 
 
 class H(http.server.BaseHTTPRequestHandler):
     def _log(self, body):
         with open(LOG, "a") as h:
-            h.write(json.dumps({"method": self.command, "url": self.path, "authorization": "present" if self.headers.get("authorization") else "absent", "body": body}) + "\n")
+            h.write(json.dumps({"method": self.command, "url": self.path, "authorization": "present" if self.headers.get("authorization") else "absent", "body": REDACT.sub("pat_[redacted]", body)}) + "\n")
 
     def _json(self, status, data):
         out = json.dumps(data).encode()
