@@ -133,7 +133,7 @@ const describeError = async (
     }
     return {
       message:
-        'publik API is disconnected. This computer was removed from your publik account. Reconnect it from Settings → Models, or use your own key.',
+        'publik API is disconnected. This computer was removed from your publik account. Restart Simplicity to connect it again, or use your own key.',
       action: { label: 'Open publikhq.com', href: PUBLIK_ACCOUNT_URL },
     };
   }

@@ -17,18 +17,19 @@
 import { app, BrowserWindow, dialog, shell } from 'electron';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as searxng from './searxng.mjs';
 import { pickServerPort } from './serverPort.mjs';
+/* The publik module (publikhq.com/sdk/publik.ts.md): Sign in with publik at
+   start-up, the plan choice, usage counts and this computer's publik install
+   key. It runs in this process only; the window and the server never hold the
+   app token. */
+import { credentialPath, ensureSignedIn, resolveProvider } from './publik.mjs';
+import { electronGateUI } from './publik-gate.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-/* publik usage counts: "app opened" and "active session" (README, "Usage
-   counts"). The client runs in this process only, never in the window. */
-const telemetry = createRequire(import.meta.url)('./publik-telemetry.cjs');
 
 let mainWindow = null;
 let serverProc = null;
@@ -97,41 +98,25 @@ function prepareDataDir(searxngURL) {
   fs.writeFileSync(file, JSON.stringify(config, null, 2));
 }
 
-/* The packaged build carries its publik app token next to the server it
-   ships with (written by desktop/prepare.mjs at build time). Dev runs and
-   source builds have no such file, and the server treats the missing env as
-   "no publik" — nothing else changes. The token reaches the Next server
-   process only; the renderer (contextIsolation, no nodeIntegration) talks to
-   it over HTTP and /api/publik never returns the token or the key. */
+/* What the Next server gets about publik. The publik module in this process
+   owns the install key (POST /installs at the gate); the server never mints.
+   It reads the module's credential file (src/lib/publik/provision.ts) for
+   the state and the choice, and, when the person connected their plan at the
+   gate, it gets the key as PUBLIK_API_KEY so its config manager creates the
+   publik provider from the environment. The app token never reaches the
+   server; the renderer (contextIsolation, no nodeIntegration) talks to the
+   server over HTTP and /api/publik never returns the key. */
 function publikEnv() {
-  try {
-    const file = path.join(standaloneDir(), 'publik-app.json');
-    const { token, baseUrl } = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (!token) return {};
-    return {
-      PUBLIK_APP_TOKEN: token,
-      PUBLIK_API_BASE_URL: baseUrl || 'https://publikhq.com/api/v1',
-      PUBLIK_APP_VERSION: app.getVersion(),
-    };
-  } catch {
-    return {};
+  const env = {
+    PUBLIK_APP_VERSION: app.getVersion(),
+    PUBLIK_CREDENTIAL_FILE: credentialPath(),
+  };
+  const provider = resolveProvider(null);
+  if (provider.kind === 'publik') {
+    env.PUBLIK_API_KEY = provider.apiKey;
+    env.PUBLIK_API_BASE_URL = provider.baseURL;
   }
-}
-
-/* The publik key of this install for the usage counts, or null when there is
-   no publik connection. It is the key the server already keeps in
-   data/config.json (modelProviders[], type "publik"). Read before each send,
-   so a connect or a disconnect during a run is picked up. Keys of other
-   providers are never returned. */
-async function publikKey() {
-  try {
-    const file = path.join(dataDir(), 'data', 'config.json');
-    const config = JSON.parse(await fs.promises.readFile(file, 'utf8'));
-    const provider = (config.modelProviders ?? []).find((p) => p?.type === 'publik');
-    return provider?.config?.apiKey ?? null;
-  } catch {
-    return null;
-  }
+  return env;
 }
 
 async function isServing(url) {
@@ -346,9 +331,15 @@ async function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
-  /* Returns at once: the send runs in the background and never throws. */
-  telemetry.start('simplicity', app.getVersion(), publikKey);
+app.whenReady().then(async () => {
+  /* Every publik app opens with Sign in with publik. The gate shows its
+     screens in a small window before the app's own window; it resolves once
+     the person is signed in (and, the first time, chose how to pay for AI),
+     then usage counting runs in the background. PUBLIK_SELF_TEST=1 prints
+     the module's self-test line and exits instead. */
+  const ui = electronGateUI({ appName: 'Simplicity' });
+  await ensureSignedIn(ui);
+  ui.close();
   return createWindow();
 });
 
