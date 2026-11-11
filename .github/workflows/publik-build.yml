@@ -11,8 +11,9 @@ name: publik build
 # It NEVER creates, changes or publishes a GitHub Release. The files are
 # checked by hand and attached to a draft release by hand.
 #
-# Both jobs start the built app against a listener on the runner and fail
-# when the usage-count request is wrong (.github/scripts/publik-telemetry-smoke.cjs).
+# Both jobs run the publik self-test of the built app against a fake publik
+# on the runner (.github/scripts/publik-self-test.cjs). The app must print
+# `publik self-test: ok simplicity <version>` after a real GET /wallet.
 
 on:
   push:
@@ -90,14 +91,14 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-      - name: Usage-count test of the built app
-        run: node .github/scripts/publik-telemetry-smoke.cjs release/mac-arm64/Simplicity.app/Contents/MacOS/Simplicity publik-telemetry-smoke-mac.json
+      - name: publik self-test of the built app
+        run: node .github/scripts/publik-self-test.cjs simplicity release/mac-arm64/Simplicity.app/Contents/MacOS/Simplicity --out publik-self-test-mac.json
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: publik-telemetry-smoke-mac
-          path: publik-telemetry-smoke-mac.json
+          name: publik-self-test-mac
+          path: publik-self-test-mac.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -171,18 +172,18 @@ jobs:
             Where-Object { $_.Name -match 'win32' -or $_.FullName -match 'win32' }
           if (-not $canvasWin) { throw "no win32 native modules in the bundle - cross-build regression" }
 
-      - name: Usage-count test of the installed app
+      - name: publik self-test of the installed app
         shell: pwsh
         run: |
           $exe = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity\Simplicity.exe'
-          node .github/scripts/publik-telemetry-smoke.cjs "$exe" publik-telemetry-smoke-windows.json
+          node .github/scripts/publik-self-test.cjs simplicity "$exe" --out publik-self-test-windows.json
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: publik-telemetry-smoke-windows
-          path: publik-telemetry-smoke-windows.json
+          name: publik-self-test-windows
+          path: publik-self-test-windows.json
           if-no-files-found: warn
           retention-days: 7
 
