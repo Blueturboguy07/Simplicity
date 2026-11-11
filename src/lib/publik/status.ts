@@ -1,7 +1,7 @@
 import { publikBalance } from './balance';
 import {
   disclosureAccepted,
-  hasAppToken,
+  hasInstallCredential,
   publikProvider,
   readState,
 } from './provision';
@@ -14,7 +14,7 @@ export async function getPublikStatus(
 ): Promise<PublikStatus> {
   const state = readState();
   const provider = publikProvider();
-  const available = hasAppToken() || Boolean(provider);
+  const available = hasInstallCredential() || Boolean(provider);
 
   let snap = publikBalance.peek();
   if (provider && opts.refreshBalance !== false) {

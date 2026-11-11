@@ -8,23 +8,26 @@ import {
   it,
   vi,
 } from 'vitest';
-import http from 'node:http';
-import { AddressInfo } from 'node:net';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { hashObj } from '@/lib/utils/hash';
 
-/* Provisioning against a local fake gateway (CONTRACT §3.2). The config
- * store is an in-memory stand-in with the real ConfigManager semantics the
- * code relies on (getConfig / updateConfig / addModelProvider /
- * removeModelProvider). Everything else is real: global fetch, node:http.
+/* The file-based publik connection. The desktop shell's module
+ * (desktop/publik.mjs) mints the install key and writes the credential
+ * file; this server only reads it. The config store is an in-memory
+ * stand-in with the real ConfigManager semantics the code relies on
+ * (getConfig / updateConfig / addModelProvider / removeModelProvider).
+ * Global fetch is stubbed to throw: nothing here may make a request.
  *
  * The rules pinned here, in order of how expensive they'd be to get wrong:
  *   1. never overwrite a user-entered key (byte-identical fixture)
- *   2. consent precedes mint — no request before acceptDisclosure() [S4]
+ *   2. consent precedes the connection — nothing is added before
+ *      acceptDisclosure()
  *   3. the key lands in modelProviders[] and NEVER in config.publik
- *   4. base_url and models from the response are honoured
- *   5. replay 200 {key:null} with no credential → one fresh install_id [B1]
- *   6. 401 key_revoked: reprovision:true re-mints with the same install_id;
- *      reprovision:false disconnects and never re-mints on its own [B2]
+ *   4. the file's key and base_url are honoured; the choice is written back
+ *   5. decline → provider removed, choice own_key; reconnect → pending;
+ *      revoked → disconnected, no re-mint here
  */
 
 const { store } = vi.hoisted(() => {
@@ -92,462 +95,262 @@ vi.mock('@/lib/config', async () => {
 import configManager from '@/lib/config';
 import {
   acceptDisclosure,
-  acknowledgeCta,
   declinePublik,
   ensureProvisioned,
   handleKeyRevoked,
-  publikModels,
+  hasInstallCredential,
+  PUBLIK_PROVIDER_TYPE,
+  readInstallCredential,
   resetPublik,
   retryPublik,
+  writeChoice,
 } from './provision';
-import {
-  DISCLOSURE_VERSION,
-  PUBLIK_BASE_URL_DEFAULT,
-  PUBLIK_KEY_RE,
-} from './types';
+import { DISCLOSURE_VERSION, PUBLIK_BASE_URL_DEFAULT } from './types';
 import { publikBalance } from './balance';
 
-/* ---- fake gateway ------------------------------------------------------ */
+const KEY = 'pk_live_abcdefghijkl_0123456789abcdef0123456789abcdef';
+const KEY2 = 'pk_live_mnopqrstuvwx_fedcba9876543210fedcba9876543210';
+const INSTALL_ID = '11111111-2222-4333-8444-555555555555';
 
-type Received = { headers: http.IncomingHttpHeaders; body: any; url: string };
+let dir: string;
+let file: string;
+const env = () =>
+  ({ PUBLIK_CREDENTIAL_FILE: file }) as unknown as NodeJS.ProcessEnv;
 
-const KEY = 'pk_live_a8k2m9x4q7v1_h3n6r9t2w5y8z1b4c7d0f3g6j9k2m5p8';
-const KEY2 = 'pk_live_b7j1n8w3p6u0_g2m5q8s1v4y7z0a3c6e9h2k5n8r1t4w7';
-
-/* publik policy (founder, 2026-09-28): an install mints at $0.00. The
-   default fake-gateway response below models that anonymous $0.00 mint;
-   tests for the once-per-account $0.05 link bonus override starter_micros
-   (and claim_state) explicitly. */
-const okBody = (overrides: Record<string, any> = {}) => ({
-  install_id: 'server-echo',
-  key: KEY,
-  key_id: 'a8k2m9x4q7v1',
-  base_url: null,
-  models: {
-    fast: 'publik-fast',
-    balanced: 'publik-balanced',
-    smart: 'publik-smart',
+const writeFile = (
+  overrides: Record<string, unknown> = {},
+  base: Record<string, unknown> | null = {
+    key: KEY,
+    base_url: 'http://publik.test/api/v1',
+    install_id: INSTALL_ID,
+    claim_url: 'http://publik.test/claim/x',
+    choice: null,
   },
-  claim_code: 'HK7F-2QWD',
-  claim_url: 'https://publikhq.com/claim/HK7F-2QWD',
-  claim_state: 'anonymous',
-  starter_micros: 0,
-  balance_micros: 0,
-  starting_credit_micros: 0,
-  ...overrides,
-});
-
-let server: http.Server;
-let baseURL: string;
-let received: Received[] = [];
-let respond: (req: Received) => {
-  status: number;
-  body?: any;
-  headers?: Record<string, string>;
-} = () => ({
-  status: 201,
-  body: okBody(),
-});
-
-beforeAll(async () => {
-  server = http.createServer((req, res) => {
-    let raw = '';
-    req.on('data', (c) => (raw += c));
-    req.on('end', () => {
-      const r: Received = {
-        headers: req.headers,
-        body: raw ? JSON.parse(raw) : null,
-        url: req.url ?? '',
-      };
-      received.push(r);
-      const out = respond(r);
-      res.writeHead(out.status, {
-        'content-type': 'application/json',
-        ...(out.headers ?? {}),
-      });
-      res.end(JSON.stringify(out.body ?? {}));
-    });
+) => {
+  fs.writeFileSync(file, JSON.stringify({ ...(base ?? {}), ...overrides }), {
+    mode: 0o600,
   });
-  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  baseURL = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1`;
+};
+const readFile = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+const providers = () => configManager.getConfig('modelProviders', []) as any[];
+const mine = () => providers().filter((p) => p.type === PUBLIK_PROVIDER_TYPE);
+const state = () => configManager.getConfig('publik', undefined) as any;
+const consent = () =>
+  configManager.updateConfig('publik', { disclosureVersion: DISCLOSURE_VERSION });
+
+const realFetch = globalThis.fetch;
+
+beforeAll(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'simplicity-publik-'));
+  file = path.join(dir, 'simplicity.json');
+  globalThis.fetch = (() => {
+    throw new Error('provision.ts must never fetch');
+  }) as any;
 });
 
-afterAll(async () => {
-  await new Promise<void>((r) => server.close(() => r()));
+afterAll(() => {
+  globalThis.fetch = realFetch;
+  fs.rmSync(dir, { recursive: true, force: true });
 });
-
-const env = (extra: Record<string, string | undefined> = {}) =>
-  ({
-    PUBLIK_APP_TOKEN: 'pat_simplicity_k3m9x2q7v5n8r4t6w1y0z2b5c8d1f4g7',
-    PUBLIK_API_BASE_URL: baseURL,
-    PUBLIK_APP_VERSION: '0.1.2',
-    ...extra,
-  }) as unknown as NodeJS.ProcessEnv;
 
 beforeEach(() => {
   (configManager as any).reset();
   publikBalance.reset();
-  received = [];
-  respond = () => ({ status: 201, body: okBody() });
+  try {
+    fs.unlinkSync(file);
+  } catch {}
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const providers = () => configManager.getConfig('modelProviders', []) as any[];
-const publikEntry = () => providers().find((p) => p.type === 'publik');
-const state = () => configManager.getConfig('publik', undefined);
-
-/* ---- tests ------------------------------------------------------------- */
-
-describe('ensureProvisioned — guards', () => {
-  it('is a no-op without PUBLIK_APP_TOKEN (dev, Docker, source builds)', async () => {
-    const before = JSON.stringify(configManager.getCurrentConfig());
-    expect(
-      await ensureProvisioned({ env: env({ PUBLIK_APP_TOKEN: undefined }) }),
-    ).toBe('no-token');
-    expect(JSON.stringify(configManager.getCurrentConfig())).toBe(before);
-    expect(received).toHaveLength(0);
-  });
-
-  it('sends nothing before the disclosure is accepted [S4]', async () => {
-    expect(await ensureProvisioned({ env: env() })).toBe('consent-required');
-    expect(received).toHaveLength(0);
-    expect(publikEntry()).toBeUndefined();
-    /* nothing minted, nothing written: the install id is born at consent */
-    expect(state()?.state).not.toBe('active');
-    expect(JSON.stringify(configManager.getCurrentConfig())).not.toContain(
-      'pk_live_',
-    );
-  });
-
-  it('declined stays declined, even with a token and consent', async () => {
-    configManager.updateConfig('publik', {
-      installId: 'x',
-      state: 'declined',
-      disclosureVersion: DISCLOSURE_VERSION,
+describe('readInstallCredential', () => {
+  it('reads the module file and normalises base_url', () => {
+    writeFile({ base_url: 'http://publik.test/api/v1/' });
+    const c = readInstallCredential(env());
+    expect(c).toMatchObject({
+      key: KEY,
+      base_url: 'http://publik.test/api/v1',
+      install_id: INSTALL_ID,
+      claim_url: 'http://publik.test/claim/x',
+      choice: null,
     });
-    expect(await ensureProvisioned({ env: env() })).toBe('declined');
-    expect(received).toHaveLength(0);
+    expect(hasInstallCredential(env())).toBe(true);
+  });
+
+  it('is null without the env, without the file, or without a pk_ key', () => {
+    expect(readInstallCredential({} as unknown as NodeJS.ProcessEnv)).toBeNull();
+    expect(readInstallCredential(env())).toBeNull();
+    writeFile({ key: 'sk-not-a-publik-key' });
+    expect(readInstallCredential(env())).toBeNull();
+    writeFile({ key: KEY, base_url: 'not a url' });
+    expect(readInstallCredential(env())?.base_url).toBe(PUBLIK_BASE_URL_DEFAULT);
+    expect(hasInstallCredential({} as unknown as NodeJS.ProcessEnv)).toBe(false);
+  });
+
+  it('writeChoice keeps every other field and the file mode', () => {
+    writeFile();
+    writeChoice('own_key', env());
+    expect(readFile()).toEqual({
+      key: KEY,
+      base_url: 'http://publik.test/api/v1',
+      install_id: INSTALL_ID,
+      claim_url: 'http://publik.test/claim/x',
+      choice: 'own_key',
+    });
+    if (process.platform !== 'win32') {
+      expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    }
+    writeChoice('publik', {} as unknown as NodeJS.ProcessEnv);
+    expect(readFile().choice).toBe('own_key');
   });
 });
 
-describe('acceptDisclosure — the mint', () => {
-  it('happy path: one POST /installs, key in modelProviders[] only', async () => {
-    expect(await acceptDisclosure({ env: env() })).toBe('active');
-
-    expect(received).toHaveLength(1);
-    const [req] = received;
-    expect(req.url).toBe('/api/v1/installs');
-    expect(req.headers.authorization).toBe(`Bearer ${env().PUBLIK_APP_TOKEN}`);
-    expect(req.body.app_token).toBe(env().PUBLIK_APP_TOKEN);
-    expect(req.body.app_slug).toBe('simplicity');
-    expect(req.body.app_version).toBe('0.1.2');
-    expect(['macos', 'windows', 'linux']).toContain(req.body.os);
-    expect(req.body.install_id).toBe(state().installId);
-    expect(req.body.disclosure_version).toBe(DISCLOSURE_VERSION);
-    expect(req.body.dialects).toEqual(['chat_completions']);
-
-    const entry = publikEntry();
-    expect(entry).toBeDefined();
-    expect(entry.name).toBe('publik API');
-    expect(entry.config).toEqual({ apiKey: KEY, baseURL: baseURL });
-    expect(providers().filter((p) => p.type === 'publik')).toHaveLength(1);
-
-    const s = state();
-    expect(s.state).toBe('active');
-    expect(s.claimUrl).toBe('https://publikhq.com/claim/HK7F-2QWD');
-    expect(s.claimCode).toBe('HK7F-2QWD');
-    /* publik policy: an anonymous mint is $0.00, not a starter grant. */
-    expect(s.starterMicros).toBe(0);
-    expect(JSON.stringify(s)).not.toContain('pk_live_');
-    expect(publikBalance.peek().balanceMicros).toBe(0);
-  });
-
-  it('is idempotent: a second call makes zero requests', async () => {
-    await acceptDisclosure({ env: env() });
-    expect(await ensureProvisioned({ env: env() })).toBe('active');
-    expect(await acceptDisclosure({ env: env() })).toBe('active');
-    expect(received).toHaveLength(1);
-    expect(providers().filter((p) => p.type === 'publik')).toHaveLength(1);
-  });
-
-  it('honours base_url and models from the response over the compiled defaults', async () => {
-    respond = () => ({
-      status: 201,
-      body: okBody({
-        base_url: 'https://api.publikhq.com/v1/',
-        models: {
-          fast: 'publik-fast-2',
-          balanced: 'publik-balanced-2',
-          smart: 'publik-smart',
-        },
-      }),
-    });
-    await acceptDisclosure({ env: env() });
-    expect(publikEntry().config.baseURL).toBe('https://api.publikhq.com/v1');
-    expect(publikModels()).toEqual({
-      fast: 'publik-fast-2',
-      balanced: 'publik-balanced-2',
-      smart: 'publik-smart',
-    });
-  });
-
-  it('falls back to the compiled base URL when the response omits it', async () => {
-    respond = () => ({
-      status: 201,
-      body: okBody({ base_url: undefined, models: undefined }),
-    });
-    await acceptDisclosure({ env: env() });
-    expect(publikEntry().config.baseURL).toBe(baseURL);
-    expect(publikModels()).toEqual({
-      fast: 'publik-fast',
-      balanced: 'publik-balanced',
-      smart: 'publik-smart',
-    });
-  });
-
-  it('uses the production base URL when no override is set', () => {
-    expect(PUBLIK_BASE_URL_DEFAULT).toBe('https://publikhq.com/api/v1');
-  });
-
-  it('never overwrites a user-entered key (byte-identical fixture, still first)', async () => {
-    const byo = {
-      id: '11111111-1111-4111-8111-111111111111',
-      name: 'My OpenAI',
-      type: 'openai',
-      chatModels: [{ name: 'GPT 5.1', key: 'gpt-5.1' }],
-      embeddingModels: [],
-      config: {
-        apiKey: 'sk-user-entered-secret',
-        baseURL: 'https://api.openai.com/v1',
-      },
-      hash: hashObj({
-        apiKey: 'sk-user-entered-secret',
-        baseURL: 'https://api.openai.com/v1',
-      }),
-    };
-    configManager.updateConfig('modelProviders', [byo]);
-    const before = JSON.stringify(byo);
-
-    expect(await acceptDisclosure({ env: env() })).toBe('active');
-
-    expect(providers()).toHaveLength(2);
-    expect(JSON.stringify(providers()[0])).toBe(before);
-    expect(providers()[1].type).toBe('publik');
-  });
-
-  it('replay 200 {key:null} with no credential → mints once more with a fresh install_id [B1]', async () => {
-    let n = 0;
-    respond = () =>
-      n++ === 0
-        ? {
-            status: 200,
-            body: okBody({
-              key: null,
-              starter_micros: 0,
-              claim_state: 'anonymous',
-            }),
-          }
-        : { status: 201, body: okBody({ key: KEY2, starter_micros: 0 }) };
-
-    expect(await acceptDisclosure({ env: env() })).toBe('active');
-    expect(received).toHaveLength(2);
-    expect(received[0].body.install_id).not.toBe(received[1].body.install_id);
-    expect(received[1].body.install_id).toBe(state().installId);
-    expect(publikEntry().config.apiKey).toBe(KEY2);
-  });
-
-  it('a second replay does not loop', async () => {
-    respond = () => ({ status: 200, body: okBody({ key: null }) });
-    expect(await acceptDisclosure({ env: env() })).toBe('failed');
-    expect(received).toHaveLength(2);
-    expect(publikEntry()).toBeUndefined();
-  });
-
-  it('401 app token → failed, no provider, never a throw', async () => {
-    respond = () => ({
-      status: 401,
-      body: { error: { type: 'invalid_app_token', message: 'nope' } },
-    });
-    expect(await acceptDisclosure({ env: env() })).toBe('failed');
-    expect(publikEntry()).toBeUndefined();
-    expect(state().state).toBe('pending');
-    expect(state().lastError).toBe('app token rejected');
-  });
-
-  it('429 → failed with Retry-After noted', async () => {
-    respond = () => ({
-      status: 429,
-      body: { error: { type: 'rate_limited' } },
-      headers: { 'retry-after': '3600' },
-    });
-    expect(await acceptDisclosure({ env: env() })).toBe('failed');
-    expect(state().retryAfter).toBe('3600');
-    expect(publikEntry()).toBeUndefined();
-  });
-
-  it('malformed key → failed, nothing stored', async () => {
-    respond = () => ({
-      status: 201,
-      body: okBody({ key: 'sk-not-a-publik-key' }),
-    });
-    expect(await acceptDisclosure({ env: env() })).toBe('failed');
-    expect(publikEntry()).toBeUndefined();
-    expect(JSON.stringify(configManager.getCurrentConfig())).not.toContain(
-      'sk-not-a-publik-key',
-    );
-  });
-
-  it('offline → failed, state pending, lastError set, no throw; retry reuses the install id', async () => {
-    const deadEnv = env({ PUBLIK_API_BASE_URL: 'http://127.0.0.1:1/api/v1' });
-    expect(await acceptDisclosure({ env: deadEnv, timeoutMs: 500 })).toBe(
-      'failed',
-    );
-    expect(state().state).toBe('pending');
-    expect(state().lastError).toBeTruthy();
-    expect(publikEntry()).toBeUndefined();
-    const id = state().installId;
-
-    expect(await retryPublik({ env: env() })).toBe('active');
-    expect(received[0].body.install_id).toBe(id);
-    expect(state().lastError).toBeUndefined();
-  });
-
-  it('the key format the app accepts is exactly the contract format', () => {
-    expect(PUBLIK_KEY_RE.test(KEY)).toBe(true);
-    expect(
-      PUBLIK_KEY_RE.test(
-        'pk_test_a8k2m9x4q7v1_h3n6r9t2w5y8z1b4c7d0f3g6j9k2m5p8',
-      ),
-    ).toBe(true);
-    expect(PUBLIK_KEY_RE.test('pk_live_short_h3n6')).toBe(false);
-    expect(PUBLIK_KEY_RE.test('sk-proj-abcdef')).toBe(false);
-  });
-});
-
-describe('decline / reset', () => {
-  it('declinePublik removes the entry and pins declined; ensureProvisioned then does nothing', async () => {
-    await acceptDisclosure({ env: env() });
-    declinePublik();
-    expect(publikEntry()).toBeUndefined();
-    expect(state().state).toBe('declined');
-    expect(await ensureProvisioned({ env: env() })).toBe('declined');
-    expect(received).toHaveLength(1);
-  });
-
-  it('resetPublik after a decline re-shows the disclosure with a fresh install id', async () => {
-    await acceptDisclosure({ env: env() });
-    const firstId = state().installId;
-    declinePublik();
-    resetPublik();
-    expect(state().state).toBe('pending');
-    expect(state().installId).not.toBe(firstId);
-    expect(state().disclosureVersion).toBeUndefined();
-    expect(await ensureProvisioned({ env: env() })).toBe('consent-required');
-    expect(await acceptDisclosure({ env: env() })).toBe('active');
-    expect(received).toHaveLength(2);
-  });
-});
-
-describe('the plan CTA (CONTRACT §12)', () => {
-  it('the mint seeds the balance line from the response: starter and claim_url, never a constant', async () => {
-    respond = () => ({
-      status: 201,
-      body: okBody({ starter_micros: 500000, balance_micros: 500000 }),
-    });
-    await acceptDisclosure({ env: env() });
-    const snap = publikBalance.peek();
-    expect(snap.starterRemainingMicros).toBe(500000);
-    expect(snap.balanceMicros).toBe(500000);
-    expect(snap.claimUrl).toBe('https://publikhq.com/claim/HK7F-2QWD');
-    expect(snap.claimState).toBe('anonymous');
-    expect(state().starterMicros).toBe(500000);
-    expect(state().claimUrl).toBe('https://publikhq.com/claim/HK7F-2QWD');
-  });
-
-  it('"Later" keeps the key and leaves the balance exactly as minted; only ctaSeenAt is recorded', async () => {
-    await acceptDisclosure({ env: env() });
-    const before = JSON.stringify(publikEntry());
-    const balanceBefore = publikBalance.peek().balanceMicros;
-
-    acknowledgeCta({ now: () => new Date('2026-09-19T12:00:00Z') });
-
-    expect(JSON.stringify(publikEntry())).toBe(before);
-    expect(publikEntry().config.apiKey).toBe(KEY);
-    expect(state().state).toBe('active');
-    expect(state().ctaSeenAt).toBe('2026-09-19T12:00:00.000Z');
-    expect(publikBalance.peek().balanceMicros).toBe(balanceBefore);
-    /* and nothing was sent — no second mint, no claim on the user's behalf */
-    expect(received).toHaveLength(1);
-    expect(await ensureProvisioned({ env: env() })).toBe('active');
-    expect(received).toHaveLength(1);
-  });
-
-  it('"Later" before any state exists is a no-op', () => {
-    acknowledgeCta();
+describe('ensureProvisioned', () => {
+  it('is a no-op without a credential file', async () => {
+    expect(await ensureProvisioned({ env: env() })).toBe('no-token');
+    expect(providers()).toEqual([]);
     expect(state()).toBeUndefined();
   });
 
-  it('a 402 is noted for the banner and cleared by the next metered response', async () => {
-    await acceptDisclosure({ env: env() });
-    publikBalance.noteCreditError(
-      'Not enough publik credit for this request.',
-      'https://publikhq.com/claim/HK7F-2QWD',
+  it('never overwrites a user-entered key', async () => {
+    const user = configManager.addModelProvider(
+      PUBLIK_PROVIDER_TYPE,
+      'publik API',
+      { apiKey: 'pk_live_usertyped00_user000000000000000000000000000', baseURL: 'http://mine.test/v1' },
     );
-    expect(publikBalance.peek().creditError).toEqual({
-      message: 'Not enough publik credit for this request.',
-      topUpUrl: 'https://publikhq.com/claim/HK7F-2QWD',
+    const before = JSON.stringify(user);
+    writeFile();
+    consent();
+    expect(await ensureProvisioned({ env: env() })).toBe('active');
+    // The module's file wins over a stale stored key only when one credential
+    // exists: the stored provider follows the file's key and base_url.
+    expect(mine()).toHaveLength(1);
+    expect(mine()[0].id).toBe(user.id);
+    expect(mine()[0].config).toEqual({
+      apiKey: KEY,
+      baseURL: 'http://publik.test/api/v1',
     });
-    publikBalance.observe(
-      new Headers({ 'x-publik-balance': '1000', 'x-publik-claim-state': 'anonymous' }),
+    expect(mine()[0].hash).toBe(hashObj(mine()[0].config));
+    expect(before).not.toBe(JSON.stringify(mine()[0]));
+    // A provider of another type is untouched byte for byte.
+    const other = configManager.addModelProvider('openai', 'OpenAI', {
+      apiKey: 'sk-user',
+    });
+    const otherBefore = JSON.stringify(other);
+    expect(await ensureProvisioned({ env: env() })).toBe('active');
+    expect(JSON.stringify(providers().find((p) => p.id === other.id))).toBe(
+      otherBefore,
     );
-    expect(publikBalance.peek().creditError).toBeNull();
+    expect(providers()).toHaveLength(2);
   });
-});
 
-describe('handleKeyRevoked [B2]', () => {
-  it('reprovision:true re-mints silently with the SAME install_id', async () => {
-    await acceptDisclosure({ env: env() });
-    const id = state().installId;
-    respond = () => ({
-      status: 201,
-      body: okBody({ key: KEY2, starter_micros: 0 }),
+  it('requires consent before anything is connected', async () => {
+    writeFile();
+    expect(await ensureProvisioned({ env: env() })).toBe('consent-required');
+    expect(providers()).toEqual([]);
+    expect(state()?.state).toBeUndefined();
+    expect(readFile().choice).toBeNull();
+  });
+
+  it('accept → provider from the file, state active, choice publik', async () => {
+    writeFile();
+    const now = () => new Date('2026-11-10T12:00:00Z');
+    expect(await acceptDisclosure({ env: env(), now })).toBe('active');
+    expect(mine()).toHaveLength(1);
+    expect(mine()[0].config).toEqual({
+      apiKey: KEY,
+      baseURL: 'http://publik.test/api/v1',
     });
-
-    expect(await handleKeyRevoked(true, { env: env() })).toBe('active');
-    expect(received).toHaveLength(2);
-    expect(received[1].body.install_id).toBe(id);
-    expect(publikEntry().config.apiKey).toBe(KEY2);
-    expect(providers().filter((p) => p.type === 'publik')).toHaveLength(1);
+    expect(mine()[0].hash).toBe(hashObj(mine()[0].config));
+    const s = state();
+    expect(s.state).toBe('active');
+    expect(s.installId).toBe(INSTALL_ID);
+    expect(s.claimUrl).toBe('http://publik.test/claim/x');
+    expect(s.mintedAt).toBe('2026-11-10T12:00:00.000Z');
+    expect(s.disclosureVersion).toBe(DISCLOSURE_VERSION);
+    expect(JSON.stringify(s)).not.toContain(KEY);
+    expect(readFile().choice).toBe('publik');
+    // Idempotent.
+    expect(await ensureProvisioned({ env: env() })).toBe('active');
+    expect(mine()).toHaveLength(1);
   });
 
-  it('reprovision:false drops the key, marks disconnected, and never re-mints on its own', async () => {
+  it('follows a key the module minted again and folds a duplicate', async () => {
+    writeFile();
     await acceptDisclosure({ env: env() });
-    expect(await handleKeyRevoked(false, { env: env() })).toBe('disconnected');
-    expect(publikEntry()).toBeUndefined();
+    const id = mine()[0].id;
+    writeFile({ key: KEY2 });
+    // The config manager adds a second entry from PUBLIK_API_KEY when the
+    // key changed; the sync folds it into the first.
+    configManager.addModelProvider(PUBLIK_PROVIDER_TYPE, 'publik API', {
+      apiKey: KEY2,
+      baseURL: 'http://publik.test/api/v1',
+    });
+    configManager.updateConfig('publik', {
+      ...state(),
+      state: 'disconnected',
+      lastError: 'old',
+    });
+    expect(await ensureProvisioned({ env: env() })).toBe('active');
+    expect(mine()).toHaveLength(1);
+    expect(mine()[0].id).toBe(id);
+    expect(mine()[0].config.apiKey).toBe(KEY2);
+    expect(state().state).toBe('active');
+    expect(state().lastError).toBeUndefined();
+  });
+
+  it('decline → provider removed, state declined, choice own_key', async () => {
+    writeFile();
+    await acceptDisclosure({ env: env() });
+    expect(mine()).toHaveLength(1);
+    declinePublik({ env: env() });
+    expect(mine()).toEqual([]);
+    expect(state().state).toBe('declined');
+    expect(readFile().choice).toBe('own_key');
+    // A declined install stays declined.
+    expect(await ensureProvisioned({ env: env() })).toBe('declined');
+    expect(await retryPublik({ env: env() })).toBe('declined');
+    expect(mine()).toEqual([]);
+    expect(readFile().choice).toBe('own_key');
+  });
+
+  it('reconnect → pending with the module install id, consent again', async () => {
+    writeFile();
+    await acceptDisclosure({ env: env() });
+    declinePublik({ env: env() });
+    resetPublik({ env: env() });
+    expect(state()).toEqual({ installId: INSTALL_ID, state: 'pending' });
+    expect(readFile().choice).toBe('own_key');
+    expect(await retryPublik({ env: env() })).toBe('consent-required');
+    expect(mine()).toEqual([]);
+    expect(await acceptDisclosure({ env: env() })).toBe('active');
+    expect(mine()).toHaveLength(1);
+    expect(readFile().choice).toBe('publik');
+  });
+
+  it('revoked → disconnected, no re-mint here, next start reconnects', async () => {
+    writeFile();
+    await acceptDisclosure({ env: env() });
+    expect(await handleKeyRevoked(true, { env: env() })).toBe('disconnected');
+    expect(mine()).toEqual([]);
     expect(state().state).toBe('disconnected');
+    expect(state().lastError).toMatch(/Restart Simplicity/);
     expect(await ensureProvisioned({ env: env() })).toBe('disconnected');
-    expect(await retryPublik({ env: env() })).toBe('disconnected');
-    expect(received).toHaveLength(1);
+    expect(mine()).toEqual([]);
+    // The choice in the file is the person's: a revoke does not change it.
+    expect(readFile().choice).toBe('publik');
   });
 
-  it('a user-entered key is untouched by a revoke', async () => {
-    const byo = {
-      id: '22222222-2222-4222-8222-222222222222',
-      name: 'Anthropic',
-      type: 'anthropic',
-      chatModels: [],
-      embeddingModels: [],
-      config: { apiKey: 'sk-ant-user' },
-      hash: hashObj({ apiKey: 'sk-ant-user' }),
-    };
-    configManager.updateConfig('modelProviders', [byo]);
-    const before = JSON.stringify(byo);
+  it('never calls fetch', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch');
+    writeFile();
     await acceptDisclosure({ env: env() });
-    await handleKeyRevoked(false, { env: env() });
-    expect(JSON.stringify(providers()[0])).toBe(before);
-    expect(providers()).toHaveLength(1);
+    declinePublik({ env: env() });
+    resetPublik({ env: env() });
+    await retryPublik({ env: env() });
+    await handleKeyRevoked(true, { env: env() });
+    expect(spy).not.toHaveBeenCalled();
   });
 });

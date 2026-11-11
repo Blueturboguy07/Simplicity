@@ -1,41 +1,41 @@
-import os from 'node:os';
+import fs from 'node:fs';
 import configManager from '@/lib/config';
 import { ConfigModelProvider } from '@/lib/config/types';
+import { hashObj } from '@/lib/utils/hash';
 import { publikBalance } from './balance';
 import {
   DISCLOSURE_VERSION,
-  InstallResponse,
-  PUBLIK_APP_SLUG,
   PUBLIK_BASE_URL_DEFAULT,
-  PUBLIK_KEY_RE,
   PUBLIK_MODEL_DEFAULTS,
   PublikState,
   PublikTier,
 } from './types';
 
-/* First-launch provisioning against `POST /installs` (CONTRACT §3.2).
+/* The publik connection of the desktop app (publikhq.com/skills/setup.md).
+ *
+ * The desktop shell runs the publik module (desktop/publik.mjs) before the
+ * window opens: Sign in with publik, then Get a plan / Connect your plan /
+ * Use my own key. The module mints this computer's install key (POST
+ * /installs) and keeps it in its credential file, with the person's choice.
+ * This server never mints. It reads that file, hands the key to the app's
+ * credential store (config.json modelProviders[]) when the person connected
+ * their plan, and records a decline back into the file so the next start
+ * honours it.
  *
  * Rules, each pinned by provision.test.ts:
- *   - Consent precedes mint [S4]: nothing is sent until the disclosure has
- *     been accepted (`acceptDisclosure`). Never at server boot.
- *   - A user-entered key always wins; an existing publik connection is left
- *     alone; a declined install stays declined. Never overwrite.
- *   - The key lands in the app's existing credential store (config.json
- *     modelProviders[]) through configManager.addModelProvider(); the
- *     `config.publik` block holds state only, never the key.
- *   - `base_url` and `models` from the response are honoured over the
- *     compiled defaults.
- *   - Without PUBLIK_APP_TOKEN (dev, Docker, source builds) every path here
- *     is a no-op.
- *   - Never throws: an offline first launch is normal.
+ *   - No request is ever made here: no fetch, no mint.
+ *   - A user-entered key always wins; an existing publik connection follows
+ *     the module's key; a declined install stays declined. Never overwrite.
+ *   - The key lands in modelProviders[] through configManager
+ *     .addModelProvider(); the `config.publik` block holds state only.
+ *   - Without PUBLIK_CREDENTIAL_FILE (dev, Docker, source builds) every
+ *     path here is a no-op: the app behaves as before, with the user's own
+ *     providers.
  */
 
 export type ProvisionDeps = {
   env?: NodeJS.ProcessEnv;
-  fetch?: typeof fetch;
   now?: () => Date;
-  timeoutMs?: number;
-  installId?: () => string;
 };
 
 export type ProvisionResult =
@@ -49,10 +49,79 @@ export type ProvisionResult =
 export const PUBLIK_PROVIDER_TYPE = 'publik';
 export const PUBLIK_PROVIDER_NAME = 'publik API';
 
-export const publikProvider = (): ConfigModelProvider | undefined =>
-  (configManager.getConfig('modelProviders', []) as ConfigModelProvider[]).find(
+export type InstallChoice = 'publik' | 'own_key';
+
+/* The module's credential file: desktop/publik.mjs writes it (mode 0600),
+   the shell passes its path as PUBLIK_CREDENTIAL_FILE. */
+export type InstallCredential = {
+  key: string;
+  base_url: string;
+  install_id: string;
+  claim_url: string | null;
+  choice: InstallChoice | null;
+};
+
+export const credentialFile = (env: NodeJS.ProcessEnv = process.env) =>
+  env.PUBLIK_CREDENTIAL_FILE || '';
+
+export function readInstallCredential(
+  env: NodeJS.ProcessEnv = process.env,
+): InstallCredential | null {
+  const file = credentialFile(env);
+  if (!file) return null;
+  try {
+    const c = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (typeof c?.key !== 'string' || !c.key.startsWith('pk_')) return null;
+    return {
+      key: c.key,
+      base_url:
+        typeof c.base_url === 'string' && /^https?:\/\//.test(c.base_url)
+          ? c.base_url.replace(/\/$/, '')
+          : PUBLIK_BASE_URL_DEFAULT,
+      install_id: typeof c.install_id === 'string' ? c.install_id : '',
+      claim_url: typeof c.claim_url === 'string' ? c.claim_url : null,
+      choice: c.choice === 'publik' || c.choice === 'own_key' ? c.choice : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/* The person's answer, in the module's file, so the next start of the app
+   honours it (the module's own setChoice()). Every other field stays. */
+export function writeChoice(
+  choice: InstallChoice | null,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const file = credentialFile(env);
+  if (!file) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (typeof raw?.key !== 'string') return;
+    fs.writeFileSync(file, JSON.stringify({ ...raw, choice }, null, 2), {
+      mode: 0o600,
+    });
+    try {
+      fs.chmodSync(file, 0o600);
+    } catch {
+      /* Windows */
+    }
+  } catch {
+    /* no credential on this computer: nothing to record */
+  }
+}
+
+export const hasInstallCredential = (
+  env: NodeJS.ProcessEnv = process.env,
+) => readInstallCredential(env) !== null;
+
+const publikProviders = (): ConfigModelProvider[] =>
+  (configManager.getConfig('modelProviders', []) as ConfigModelProvider[]).filter(
     (p) => p.type === PUBLIK_PROVIDER_TYPE,
   );
+
+export const publikProvider = (): ConfigModelProvider | undefined =>
+  publikProviders()[0];
 
 export const readState = (): PublikState | undefined =>
   configManager.getConfig('publik', undefined);
@@ -67,214 +136,96 @@ const writeState = (patch: Partial<PublikState>) => {
   configManager.updateConfig('publik', next);
 };
 
-export const hasAppToken = (env: NodeJS.ProcessEnv = process.env) =>
-  Boolean(env.PUBLIK_APP_TOKEN);
-
 export const disclosureAccepted = (state = readState()) =>
   (state?.disclosureVersion ?? 0) >= DISCLOSURE_VERSION;
 
-const osName = (): 'macos' | 'windows' | 'linux' => {
-  if (process.platform === 'darwin') return 'macos';
-  if (process.platform === 'win32') return 'windows';
-  return 'linux';
-};
-
-const deviceName = (): string | undefined => {
-  try {
-    const name = os
-      .hostname()
-      .replace(/\.local$/, '')
-      .trim();
-    return name ? name.slice(0, 120) : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
-const tierModels = (
-  models: InstallResponse['models'],
-): Partial<Record<PublikTier, string>> | undefined => {
-  if (!models || typeof models !== 'object') return undefined;
-  const out: Partial<Record<PublikTier, string>> = {};
-  for (const tier of ['fast', 'balanced', 'smart'] as PublikTier[]) {
-    const v = models[tier];
-    if (typeof v === 'string' && /^[a-z0-9._:/-]{1,64}$/i.test(v))
-      out[tier] = v;
-  }
-  return Object.keys(out).length ? out : undefined;
-};
-
-/* The alias list the provider serves: response-supplied names first, the
-   compiled defaults for anything the response left out. */
+/* The alias list the provider serves: names an older install stored first,
+   the compiled defaults for anything else. */
 export const publikModels = (): Record<PublikTier, string> => ({
   ...PUBLIK_MODEL_DEFAULTS,
   ...(readState()?.models ?? {}),
 });
 
-const mint = async (
-  installId: string,
-  deps: ProvisionDeps,
-): Promise<{
-  status: number;
-  body: InstallResponse | null;
-  retryAfter: string | null;
-}> => {
-  const env = deps.env ?? process.env;
-  const token = env.PUBLIK_APP_TOKEN!;
-  const baseURL = (env.PUBLIK_API_BASE_URL || PUBLIK_BASE_URL_DEFAULT).replace(
-    /\/$/,
-    '',
-  );
-
-  const res = await (deps.fetch ?? fetch)(`${baseURL}/installs`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      app_token: token,
-      app_slug: PUBLIK_APP_SLUG,
-      app_version:
-        env.PUBLIK_APP_VERSION || process.env.NEXT_PUBLIC_VERSION || '0.0.0',
-      os: osName(),
-      os_version: os.release(),
-      arch: process.arch,
-      device_name: deviceName(),
-      install_id: installId,
-      disclosure_version: readState()?.disclosureVersion ?? DISCLOSURE_VERSION,
-      dialects: ['chat_completions'],
-    }),
-    signal: AbortSignal.timeout(deps.timeoutMs ?? 8_000),
-  });
-
-  let body: InstallResponse | null = null;
-  try {
-    body = (await res.json()) as InstallResponse;
-  } catch {
-    body = null;
-  }
-  return {
-    status: res.status,
-    body,
-    retryAfter: res.headers.get('retry-after'),
-  };
+const removePublikProviders = () => {
+  for (const p of publikProviders()) configManager.removeModelProvider(p.id);
 };
 
-/* Idempotent. Safe to call on every boot, from the accept/retry routes and
-   after a `key_revoked` answer. Returns the reason it did nothing so the
-   caller (and the tests) can tell the cases apart. */
+/* The stored connection follows the module's key: a key the module minted
+   again (after a revoke) replaces the old one, and a second publik entry
+   (the config manager creates one from PUBLIK_API_KEY when the key changed)
+   is folded into the first. A user-entered provider is never touched. */
+const syncProviders = (credential: InstallCredential) => {
+  const all = configManager.getConfig(
+    'modelProviders',
+    [],
+  ) as ConfigModelProvider[];
+  const mine = all.filter((p) => p.type === PUBLIK_PROVIDER_TYPE);
+  if (mine.length === 0) return;
+  const [keep, ...extra] = mine;
+  const config = { apiKey: credential.key, baseURL: credential.base_url };
+  const stale =
+    keep.config?.apiKey !== config.apiKey ||
+    keep.config?.baseURL !== config.baseURL;
+  if (!stale && extra.length === 0) return;
+  const next = all
+    .filter((p) => !extra.includes(p))
+    .map((p) => (p === keep ? { ...p, config, hash: hashObj(config) } : p));
+  configManager.updateConfig('modelProviders', next);
+};
+
+/* Idempotent. Safe to call on every status read and from the accept/retry
+   routes. Returns the reason it did nothing so the caller (and the tests)
+   can tell the cases apart. */
 export async function ensureProvisioned(
   deps: ProvisionDeps = {},
 ): Promise<ProvisionResult> {
   const env = deps.env ?? process.env;
-
-  /* 1. Never overwrite. */
-  if (publikProvider()) return 'active';
+  const credential = readInstallCredential(env);
   const state = readState();
-  if (state?.state === 'declined') return 'declined';
-  if (state?.state === 'disconnected') return 'disconnected';
-  if (!hasAppToken(env)) return 'no-token';
-  /* 2. Consent precedes mint. */
-  if (!disclosureAccepted(state)) return 'consent-required';
 
-  const newId = deps.installId ?? (() => crypto.randomUUID());
-  let installId = state?.installId ?? newId();
-  if (!state?.installId) writeState({ installId, state: 'pending' });
-
-  const baseURL = (env.PUBLIK_API_BASE_URL || PUBLIK_BASE_URL_DEFAULT).replace(
-    /\/$/,
-    '',
-  );
-
-  try {
-    let { status, body, retryAfter } = await mint(installId, deps);
-
-    /* Replay [B1]: the server knows this install_id but cannot return the
-       old secret. We have no credential (or we would have returned at
-       step 1), so mint a fresh install once. */
-    if (status === 200 && (!body || body.key == null)) {
-      installId = newId();
-      writeState({ installId, state: 'pending' });
-      ({ status, body, retryAfter } = await mint(installId, deps));
-    }
-
-    if (status === 401 || status === 403) {
-      writeState({ state: 'pending', lastError: 'app token rejected' });
-      return 'failed';
-    }
-    if (status === 429) {
-      writeState({
-        state: 'pending',
-        lastError: 'too many installs right now',
-        retryAfter: retryAfter ?? undefined,
-      });
-      return 'failed';
-    }
-    if (status !== 201 && status !== 200) {
-      throw new Error(`installs returned ${status}`);
-    }
-    if (
-      !body ||
-      typeof body.key !== 'string' ||
-      !PUBLIK_KEY_RE.test(body.key)
-    ) {
-      throw new Error('installs returned a malformed key');
-    }
-
-    /* 3. The existing credential store, through the existing API. The
-          response's base_url wins over the compiled default [S8]. */
-    configManager.addModelProvider(PUBLIK_PROVIDER_TYPE, PUBLIK_PROVIDER_NAME, {
-      apiKey: body.key,
-      baseURL:
-        typeof body.base_url === 'string' && /^https?:\/\//.test(body.base_url)
-          ? body.base_url.replace(/\/$/, '')
-          : baseURL,
-    });
-
-    const starter =
-      body.starter_micros ?? body.balance_micros ?? body.starting_credit_micros;
-    writeState({
-      state: 'active',
-      installId,
-      claimUrl: typeof body.claim_url === 'string' ? body.claim_url : undefined,
-      claimCode:
-        typeof body.claim_code === 'string' ? body.claim_code : undefined,
-      claimState: body.claim_state === 'claimed' ? 'claimed' : 'anonymous',
-      models: tierModels(body.models),
-      starterMicros: typeof starter === 'number' ? starter : undefined,
-      mintedAt: (deps.now ?? (() => new Date()))().toISOString(),
-      lastError: undefined,
-      retryAfter: undefined,
-    });
-    publikBalance.reset();
-    if (body.wallet) publikBalance.applyWallet(body.wallet);
-    else if (typeof starter === 'number') {
-      /* The first-run card's balance line (CONTRACT §12.1 (a)) reads the
-         mint response until the first metered call stamps headers. */
-      publikBalance.applyWallet({
-        balance_micros: starter,
-        claim_state: body.claim_state ?? 'anonymous',
-        claim_url: body.claim_url,
-        starter: { remaining_micros: starter },
-      });
+  /* 1. Never overwrite. An existing connection follows the module's key. */
+  if (publikProvider()) {
+    if (credential) {
+      syncProviders(credential);
+      if (state?.state !== 'active' || state.lastError) {
+        writeState({
+          state: 'active',
+          installId: credential.install_id || state?.installId,
+          claimUrl: credential.claim_url ?? state?.claimUrl,
+          lastError: undefined,
+          retryAfter: undefined,
+        });
+      }
     }
     return 'active';
-  } catch (err: any) {
-    /* Offline first launch is normal (the splash may still be downloading
-       SearXNG). Leave the wizard on BYO; try again from the Retry line.
-       Only the HTTP status text is stored — never a body, never a key. */
-    const message =
-      err?.name === 'TimeoutError' || err?.name === 'AbortError'
-        ? 'publik API did not answer in time'
-        : String(err?.message ?? err).slice(0, 120);
-    writeState({ state: 'pending', lastError: message });
-    return 'failed';
   }
+  if (state?.state === 'declined') return 'declined';
+  if (state?.state === 'disconnected') return 'disconnected';
+  if (!credential) return 'no-token';
+  /* 2. Consent precedes the connection. */
+  if (!disclosureAccepted(state)) return 'consent-required';
+
+  /* 3. The existing credential store, through the existing API. */
+  configManager.addModelProvider(PUBLIK_PROVIDER_TYPE, PUBLIK_PROVIDER_NAME, {
+    apiKey: credential.key,
+    baseURL: credential.base_url,
+  });
+  writeState({
+    state: 'active',
+    installId: credential.install_id || state?.installId || crypto.randomUUID(),
+    claimUrl: credential.claim_url ?? undefined,
+    mintedAt: (deps.now ?? (() => new Date()))().toISOString(),
+    lastError: undefined,
+    retryAfter: undefined,
+  });
+  publikBalance.reset();
+  writeChoice('publik', env);
+  return 'active';
 }
 
 /* The disclosure's "Continue" button. Recording acceptance is what unlocks
-   the mint; the two happen together so the wizard sees `active` on return. */
+   the connection; the two happen together so the wizard sees `active` on
+   return. */
 export async function acceptDisclosure(deps: ProvisionDeps = {}) {
   writeState({ disclosureVersion: DISCLOSURE_VERSION });
   return ensureProvisioned(deps);
@@ -283,38 +234,39 @@ export async function acceptDisclosure(deps: ProvisionDeps = {}) {
 /* The first-run card's "Later" (and its plan button): records that the
    balance line, the justification and the CTA were shown (CONTRACT §12.4,
    "never a silent starter"). Touches nothing else — the key stays, the
-   balance stays exactly as minted, and the button stays in Settings. */
+   balance stays, and the button stays in Settings. */
 export function acknowledgeCta(deps: ProvisionDeps = {}) {
   if (!readState()) return;
   writeState({ ctaSeenAt: (deps.now ?? (() => new Date()))().toISOString() });
 }
 
 /* "Use my own key instead" — from the wizard, from Settings' delete, or
-   from a 402 card. Removes the connection and pins the choice. */
-export function declinePublik() {
-  const existing = publikProvider();
-  if (existing) configManager.removeModelProvider(existing.id);
+   from a 402 card. Removes the connection, pins the choice here and in the
+   module's file, so the gate does not ask again at the next start. */
+export function declinePublik(deps: ProvisionDeps = {}) {
+  removePublikProviders();
   publikBalance.reset();
   writeState({ state: 'declined', lastError: undefined });
+  writeChoice('own_key', deps.env ?? process.env);
 }
 
-/* "Reconnect" after a decline or a disconnect: back to pending with a fresh
-   install identity (the old one was either never minted or was revoked by
-   the user's own hand), then the disclosure shows again. */
-export function resetPublik() {
-  const existing = publikProvider();
-  if (existing) configManager.removeModelProvider(existing.id);
+/* "Reconnect" after a decline or a disconnect: back to pending, then the
+   disclosure shows again before the connection is made. The install
+   identity is the module's; the choice in the file is left as it is until
+   the person continues. */
+export function resetPublik(deps: ProvisionDeps = {}) {
+  removePublikProviders();
   publikBalance.reset();
-  /* No disclosureVersion: acceptance is per install, so the sheet shows
-     again before anything is sent. */
+  const credential = readInstallCredential(deps.env ?? process.env);
+  /* No disclosureVersion: acceptance is per connection, so the sheet shows
+     again before anything is connected. */
   configManager.updateConfig('publik', {
-    installId: crypto.randomUUID(),
+    installId: credential?.install_id || crypto.randomUUID(),
     state: 'pending',
   } satisfies PublikState);
 }
 
-/* Retry after an offline / rate-limited mint — same install id, same
-   consent. */
+/* Retry from the wizard: same consent, the file is read again. */
 export async function retryPublik(deps: ProvisionDeps = {}) {
   const state = readState();
   if (state?.state === 'pending')
@@ -322,26 +274,20 @@ export async function retryPublik(deps: ProvisionDeps = {}) {
   return ensureProvisioned(deps);
 }
 
-/* `401 key_revoked` semantics (CONTRACT §1 [B2]):
-     reprovision:true  — the idle sweep took the key; mint again with the
-                         SAME install_id, silently. Consent already given.
-     reprovision:false — the user revoked this computer from the dashboard
-                         (or an uninstaller hook); drop the dead key and
-                         stop. Reconnect is a user action. */
+/* `401 key_revoked` from the gateway: the key in the file is dead. Only the
+   module can mint a new one, and it does so at the next start of the app
+   (its gate sees the 401 and provisions again). Drop the dead key, say so,
+   and stop; the next start reconnects. */
 export async function handleKeyRevoked(
-  reprovision: boolean,
-  deps: ProvisionDeps = {},
+  _reprovision: boolean,
+  _deps: ProvisionDeps = {},
 ): Promise<ProvisionResult> {
-  const existing = publikProvider();
-  if (existing) configManager.removeModelProvider(existing.id);
+  removePublikProviders();
   publikBalance.reset();
-  if (!reprovision) {
-    writeState({
-      state: 'disconnected',
-      lastError: 'removed from your publik account',
-    });
-    return 'disconnected';
-  }
-  writeState({ state: 'pending', lastError: undefined });
-  return ensureProvisioned(deps);
+  writeState({
+    state: 'disconnected',
+    lastError:
+      "This computer's publik key was revoked. Restart Simplicity to connect again.",
+  });
+  return 'disconnected';
 }
