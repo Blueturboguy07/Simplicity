@@ -91,7 +91,8 @@ jobs:
           FILE: ${{ inputs.file }}
           WANT_VERSION: ${{ inputs.version }}
         run: |
-          set -uo pipefail
+          # The runner's shell is `bash -e`: off here, every check records a problem instead of ending the step.
+          set +e; set -uo pipefail
           R="$GITHUB_WORKSPACE/results"; mkdir -p "$R"
           F="$RUNNER_TEMP/dl/$FILE"
           [ -n "$WANT_VERSION" ] || WANT_VERSION="$(node -p 'require("./package.json").version')"
@@ -116,7 +117,7 @@ jobs:
             FAKE_PID=$!
             for i in $(seq 1 40); do [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/ready")" = 204 ] && break; sleep 0.5; done
           }
-          stop_app() { pkill -TERM -f "$APP/" 2>/dev/null; sleep 2; pkill -KILL -f "$APP/" 2>/dev/null; sleep 1; }
+          stop_app() { pkill -TERM -f "$APP/" 2>/dev/null || true; sleep 2; pkill -KILL -f "$APP/" 2>/dev/null || true; sleep 1; }
           count() { grep -c "\"url\": \"$2\"" "$1" 2>/dev/null || true; }
 
           echo "=== a. first start, wallet anonymous: the Sign in with publik window"
@@ -136,7 +137,7 @@ jobs:
           [ "$A_UP" = true ] || problem "a: the app is not running (the gate window should wait)"
           grep -q '"authorization": "present"' "$LOG_A" || problem "a: GET /wallet carries no key"
           ls -l "$H/Library/Application Support/publik/apps/simplicity.json" || problem "a: no credential file was written"
-          stop_app; kill "$FAKE_PID" 2>/dev/null
+          stop_app; kill "$FAKE_PID" 2>/dev/null || true
 
           echo "=== b. a stored install key, choice own_key, wallet claimed: the gate passes, app_opened, the app window"
           LOG_B="$R/gate-b-fake.jsonl"; : > "$LOG_B"; fake claimed "$LOG_B"
@@ -160,7 +161,7 @@ jobs:
           [ "$(count "$LOG_B" /api/v1/installs)" -eq 0 ] || problem "b: the app minted a new key although one was stored"
           [ "$B_UP" = true ] || problem "b: the app is not running after the gate"
           ps -axo pid,command | grep -F "$APP/" | grep -v grep | cut -c1-160 | head -5
-          stop_app; kill "$FAKE_PID" 2>/dev/null
+          stop_app; kill "$FAKE_PID" 2>/dev/null || true
 
           echo "=== c. PUBLIK_SELF_TEST=1 (fake publik of publik-self-test.cjs)"
           node .github/scripts/publik-self-test.cjs simplicity "$EXE" --out "$R/self-test.json" > "$R/self-test.out" 2>&1
