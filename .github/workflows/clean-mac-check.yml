@@ -1,0 +1,189 @@
+# GUI proof of one Mac file of a release of this repo, on a clean runner and
+# never on a developer's Mac. A DRAFT release works too: the repo token reads
+# it, which Blueturboguy07/publik-clean-mac-check (public files only) cannot.
+#
+# 1. check.sh of publik-clean-mac-check (pinned): the quarantine flag a browser
+#    sets, Gatekeeper and staple checks of the dmg and of the app, install to
+#    /Applications, open. publikhq.com is blocked on the runner, so the gate
+#    shows "publik is not reachable" and check.sh takes a screenshot of it.
+# 2. The gate against a fake publik on the runner (.github/scripts/publik-fake.py):
+#    a. first start, wallet anonymous: the Sign in with publik window (screenshot);
+#    b. a stored install key with the choice "own_key", wallet claimed: the gate
+#       passes, app_opened arrives with the key, the app's window opens (screenshot);
+#    c. PUBLIK_SELF_TEST=1 prints `publik self-test: ok simplicity <version>`
+#       (.github/scripts/publik-self-test.cjs).
+# The results folder (results.jsonl, logs, screenshots, gate-check.json) is the artifact.
+name: clean Mac check
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (a draft is fine)"
+        required: true
+      file:
+        description: "The Mac file of the release"
+        required: false
+        default: "Simplicity-mac-arm64.dmg"
+      version:
+        description: "App version the file must report (empty: package.json of this checkout)"
+        required: false
+        default: ""
+
+# GitHub shows a draft release to push access only. The job reads; it writes nothing.
+permissions:
+  contents: write
+
+# No DO_NOT_TRACK here: the check waits for the first usage event at a local
+# listener. publikhq.com is blocked in /etc/hosts instead.
+
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Blueturboguy07/publik-clean-mac-check
+          ref: 91b4f39f8458df83f87f2840418bfee46dc8e0b0
+          path: cleanmac
+
+      - name: Download the file of the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          FILE: ${{ inputs.file }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dl"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$FILE" --dir "$RUNNER_TEMP/dl"
+          ls -l "$RUNNER_TEMP/dl"
+          shasum -a 256 "$RUNNER_TEMP/dl/$FILE"
+
+      - name: Block publikhq.com, so a test can not touch production
+        run: |
+          echo "127.0.0.1 publikhq.com www.publikhq.com" | sudo tee -a /etc/hosts
+          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+
+      - name: Gatekeeper is on (negative control)
+        working-directory: cleanmac
+        run: bash control.sh
+
+      - name: check.sh of publik-clean-mac-check (download as a browser, Gatekeeper, staple, install, open)
+        env:
+          TAG: ${{ inputs.tag }}
+          FILE: ${{ inputs.file }}
+        run: |
+          set -euo pipefail
+          # check.sh downloads with curl: this runner serves the file to itself.
+          (cd "$RUNNER_TEMP/dl" && exec python3 -m http.server 8765 --bind 127.0.0.1) >/dev/null 2>&1 &
+          for i in $(seq 1 40); do curl -sfI "http://127.0.0.1:8765/$FILE" >/dev/null && break; sleep 0.5; done
+          printf '[{"slug":"simplicity","file":"%s","url":"http://127.0.0.1:8765/%s","tag":"%s","runner":"arm64"}]\n' "$FILE" "$FILE" "$TAG" > "$RUNNER_TEMP/apps.json"
+          cd cleanmac
+          bash check.sh "$RUNNER_TEMP/apps.json" arm64 simplicity
+          mkdir -p "$GITHUB_WORKSPACE/results"
+          cp -R results/. "$GITHUB_WORKSPACE/results/"
+
+      - name: The gate against a fake publik (sign-in window, pass with a stored key, self-test)
+        env:
+          FILE: ${{ inputs.file }}
+          WANT_VERSION: ${{ inputs.version }}
+        run: |
+          set -uo pipefail
+          R="$GITHUB_WORKSPACE/results"; mkdir -p "$R"
+          F="$RUNNER_TEMP/dl/$FILE"
+          [ -n "$WANT_VERSION" ] || WANT_VERSION="$(node -p 'require("./package.json").version')"
+          Q="0083;$(printf '%x' "$(date +%s)");Safari;$(uuidgen)"
+          PROBLEMS=()
+          problem() { echo "PROBLEM: $*"; PROBLEMS+=("$*"); }
+
+          # A fresh install from the dmg (check.sh removed its copy), quarantine flag on.
+          MNT="$(mktemp -d)"; hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$MNT" "$F" >/dev/null
+          A="$(find "$MNT" -maxdepth 1 -name '*.app' | head -1)"
+          APP="/Applications/$(basename "$A")"; rm -rf "$APP"; ditto "$A" "$APP"
+          hdiutil detach "$MNT" -quiet -force
+          xattr -rw com.apple.quarantine "$Q" "$APP" 2>/dev/null || true
+          EXE="$APP/Contents/MacOS/$(defaults read "$APP/Contents/Info" CFBundleExecutable)"
+          VER="$(defaults read "$APP/Contents/Info" CFBundleShortVersionString)"
+          echo "app: $APP  version: $VER  want: $WANT_VERSION"
+          [ "$VER" = "$WANT_VERSION" ] || problem "Info.plist version is $VER, want $WANT_VERSION"
+
+          fake() { # fake <claim_state> <log>: sets PORT and FAKE_PID
+            PORT=$((20000 + RANDOM % 20000))
+            python3 .github/scripts/publik-fake.py "$PORT" "$2" "$1" >/dev/null 2>&1 &
+            FAKE_PID=$!
+            for i in $(seq 1 40); do [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/ready")" = 204 ] && break; sleep 0.5; done
+          }
+          stop_app() { pkill -TERM -f "$APP/" 2>/dev/null; sleep 2; pkill -KILL -f "$APP/" 2>/dev/null; sleep 1; }
+          count() { grep -c "\"url\": \"$2\"" "$1" 2>/dev/null || true; }
+
+          echo "=== a. first start, wallet anonymous: the Sign in with publik window"
+          LOG_A="$R/gate-a-fake.jsonl"; : > "$LOG_A"; fake anonymous "$LOG_A"
+          H="$(mktemp -d)"
+          ( cd "$H"; exec env HOME="$H" PUBLIK_ORIGIN="http://127.0.0.1:$PORT" "$EXE" --enable-logging=stderr ) > "$R/gate-a-app.out" 2>&1 &
+          AP=$!
+          for i in $(seq 1 45); do [ "$(count "$LOG_A" /api/v1/wallet)" -ge 1 ] && break; kill -0 "$AP" 2>/dev/null || break; sleep 1; done
+          sleep 6
+          screencapture -x "$R/gate-a-sign-in-window.png" || true
+          A_UP=false; kill -0 "$AP" 2>/dev/null && A_UP=true
+          A_INSTALLS="$(count "$LOG_A" /api/v1/installs)"; A_WALLET="$(count "$LOG_A" /api/v1/wallet)"; A_TELEMETRY="$(count "$LOG_A" /api/v1/telemetry)"
+          echo "installs=$A_INSTALLS wallet=$A_WALLET telemetry=$A_TELEMETRY still_up=$A_UP"
+          [ "$A_INSTALLS" -ge 1 ] || problem "a: no POST /api/v1/installs"
+          [ "$A_WALLET" -ge 1 ] || problem "a: no GET /api/v1/wallet"
+          [ "$A_TELEMETRY" -eq 0 ] || problem "a: telemetry was sent before the sign-in"
+          [ "$A_UP" = true ] || problem "a: the app is not running (the gate window should wait)"
+          grep -q '"authorization": "present"' "$LOG_A" || problem "a: GET /wallet carries no key"
+          ls -l "$H/Library/Application Support/publik/apps/simplicity.json" || problem "a: no credential file was written"
+          stop_app; kill "$FAKE_PID" 2>/dev/null
+
+          echo "=== b. a stored install key, choice own_key, wallet claimed: the gate passes, app_opened, the app window"
+          LOG_B="$R/gate-b-fake.jsonl"; : > "$LOG_B"; fake claimed "$LOG_B"
+          H="$(mktemp -d)"; mkdir -p "$H/Library/Application Support/publik/apps"
+          KEY="pk_live_cleanrunner0000_00000000000000000000000000000000"
+          printf '{"key":"%s","base_url":"http://127.0.0.1:%s/api/v1","install_id":"%s","claim_url":null,"choice":"own_key"}\n' "$KEY" "$PORT" "$(uuidgen | tr 'A-Z' 'a-z')" > "$H/Library/Application Support/publik/apps/simplicity.json"
+          T0=$SECONDS
+          ( cd "$H"; exec env HOME="$H" PUBLIK_ORIGIN="http://127.0.0.1:$PORT" PUBLIK_TELEMETRY_DEBUG=1 "$EXE" --enable-logging=stderr ) > "$R/gate-b-app.out" 2>&1 &
+          AP=$!
+          B_SECS=""
+          for i in $(seq 1 60); do grep -q '"url": "/api/v1/telemetry"' "$LOG_B" 2>/dev/null && { B_SECS=$((SECONDS-T0)); break; }; kill -0 "$AP" 2>/dev/null || break; sleep 1; done
+          sleep 12
+          screencapture -x "$R/gate-b-app-window.png" || true
+          B_UP=false; kill -0 "$AP" 2>/dev/null && B_UP=true
+          EV="$(grep -m1 '"url": "/api/v1/telemetry"' "$LOG_B" || true)"
+          echo "secs_to_app_opened=${B_SECS:-none} still_up=$B_UP"
+          echo "$EV" | cut -c1-300
+          [ -n "$B_SECS" ] || problem "b: no POST /api/v1/telemetry within 60 s"
+          echo "$EV" | python3 -c 'import json,sys; r=json.loads(sys.stdin.readline()); b=json.loads(r["body"]); assert b["event"]=="app_opened", b; assert b["app"]=="simplicity", b; assert b["app_version"]==sys.argv[1], b; assert r["authorization"]=="present", r' "$WANT_VERSION" || problem "b: the first event is not app_opened of simplicity $WANT_VERSION with the key"
+          grep -q '"url": "/api/v1/wallet", "authorization": "present"' "$LOG_B" || problem "b: GET /wallet carries no key"
+          [ "$(count "$LOG_B" /api/v1/installs)" -eq 0 ] || problem "b: the app minted a new key although one was stored"
+          [ "$B_UP" = true ] || problem "b: the app is not running after the gate"
+          ps -axo pid,command | grep -F "$APP/" | grep -v grep | cut -c1-160 | head -5
+          stop_app; kill "$FAKE_PID" 2>/dev/null
+
+          echo "=== c. PUBLIK_SELF_TEST=1 (fake publik of publik-self-test.cjs)"
+          node .github/scripts/publik-self-test.cjs simplicity "$EXE" --out "$R/self-test.json" > "$R/self-test.out" 2>&1
+          C_RC=$?
+          grep -E '^(PASS|RESULT)' "$R/self-test.out" || true
+          [ "$C_RC" -eq 0 ] || problem "c: the self-test failed (see self-test.out)"
+          rm -rf "$APP"
+
+          python3 - "$R/gate-check.json" "$WANT_VERSION" "$VER" "$A_INSTALLS" "$A_WALLET" "$A_TELEMETRY" "$A_UP" "${B_SECS:-}" "$B_UP" "$C_RC" "${PROBLEMS[@]+"${PROBLEMS[@]}"}" <<'PY'
+          import json, sys
+          a = sys.argv
+          out = {"pass": len(a) <= 11, "want_version": a[2], "info_plist_version": a[3],
+                 "a_sign_in_window": {"installs": int(a[4]), "wallet": int(a[5]), "telemetry": int(a[6]), "still_up": a[7] == "true"},
+                 "b_stored_key": {"secs_to_app_opened": a[8] or None, "still_up": a[9] == "true"},
+                 "c_self_test_exit": int(a[10]), "problems": a[11:]}
+          json.dump(out, open(a[1], "w"), indent=2)
+          print(json.dumps(out, indent=2))
+          PY
+          [ "${#PROBLEMS[@]}" -eq 0 ] && echo "GATE CHECK: PASS" || { echo "GATE CHECK: FAIL (${#PROBLEMS[@]})"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-clean-mac-check
+          path: results
+          retention-days: 14
