@@ -19,13 +19,11 @@
 # hardened runtime + desktop/entitlements.mac.plist). That proves the Squirrel.Mac path (same identity
 # accepted, another refused), not Developer ID signing or notarization.
 #
-# workflow_dispatch needs this file on the default branch; until it is there, a push to feat/updater runs it.
+# Run it by hand: `gh workflow run updater-proof.yml -R Blueturboguy07/Simplicity`.
 name: Updater proof
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['feat/updater']
 
 permissions:
   contents: write # creates, then deletes, the test prereleases
