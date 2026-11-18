@@ -28,7 +28,12 @@ const canNotarize =
 module.exports = {
   appId: 'com.simplicity.desktop',
   productName: 'Simplicity',
-  publish: null,
+  /* The self-updater's feed (desktop/publik-updater.cjs, docs/updates.md).
+     electron-builder writes it into resources/app-update.yml. Nothing is
+     published from here: electron-builder never uploads to a "generic" URL,
+     and the dist scripts pass --publish never as well. The feed files that
+     the app reads are made by scripts/publik-update-feed.cjs. */
+  publish: { provider: 'generic', url: 'https://publikhq.com/api/updates/simplicity/' },
   /* Never rebuild native modules: better-sqlite3 is N-API and ships prebuilds
      for every platform inside the package (prebuilds/win32-x64.node etc.), so
      a rebuild adds nothing on the native arch and hard-fails the Windows
@@ -41,7 +46,12 @@ module.exports = {
   afterPack: './desktop/afterPack.cjs',
   directories: { output: 'release' },
   mac: {
-    target: [{ target: 'dmg', arch: ['arm64'] }],
+    /* The zip is what a macOS update installs (Squirrel.Mac reads only a zip).
+       The dmg stays the download for a first install. */
+    target: [
+      { target: 'dmg', arch: ['arm64'] },
+      { target: 'zip', arch: ['arm64'] },
+    ],
     category: 'public.app-category.productivity',
     artifactName: 'Simplicity-mac-${arch}.${ext}',
     identity: hasCert ? undefined : null,

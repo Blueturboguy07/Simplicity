@@ -27,6 +27,10 @@ The counting comes with the publik module `desktop/publik.mjs` (<https://publikh
 
 The install key lives in `~/Library/Application Support/publik/apps/simplicity.json` (macOS) or `%LOCALAPPDATA%\publik\apps\simplicity.json` (Windows). To turn the counting off, set `DO_NOT_TRACK=1` in the environment before you start Simplicity. Details: <https://publikhq.com/skills/telemetry.md>. Docker and `yarn dev` do not send these events.
 
+### Updates
+
+The packaged app checks publik's signed update feed at launch, every 24 hours and from **Check for Updates…** in the menu (macOS: the Simplicity menu; Windows: Help). It downloads an update in the background, verifies its signature and checksum, and asks you to restart. To turn the automatic checks off, set `PUBLIK_UPDATES=0` in the environment. Details, the feed contract, how to cut a release, key rotation and roll back: [docs/updates.md](docs/updates.md).
+
 ### Uninstalling
 
 See [UNINSTALL.md](UNINSTALL.md) for exactly what Simplicity writes to disk and how to remove all of it — on macOS, `./scripts/uninstall.sh` does it in one step.

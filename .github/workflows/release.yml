@@ -18,19 +18,26 @@
 # builds an ad-hoc-signed DMG as a workflow ARTIFACT for inspection and
 # does NOT upload it to the release: the listing declares the mac build
 # notarized, and an unsigned asset would make that a lie.
+#
+# With the signed DMG, the mac job also uploads Simplicity-mac-arm64.zip (the
+# file a macOS update installs). Then job `feed` (update-feed.yml) adds the
+# signed update feed: latest.yml / latest-mac.yml and their .sig files
+# (docs/updates.md).
 name: release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v*', '!v*-updtest*'] # v0.0.0-updtest.* tags belong to updater-proof.yml test runs
   workflow_dispatch:
 
 permissions:
   contents: write
 
 # publik telemetry is off on build machines: a test run is not a user.
+# PUBLIK_UPDATES=0: a build machine does not check for updates.
 env:
   DO_NOT_TRACK: "1"
+  PUBLIK_UPDATES: "0"
 
 jobs:
   # A release that already holds files is never built again by its tag.
@@ -170,6 +177,7 @@ jobs:
             exit 1
           fi
           test -f release/Simplicity-mac-arm64.dmg
+          test -f release/Simplicity-mac-arm64.zip
 
       - name: Verify the notarized dmg opens clean
         if: steps.apple.outputs.signed == '1'
@@ -181,10 +189,25 @@ jobs:
         if: steps.apple.outputs.signed == '1' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" release/Simplicity-mac-arm64.dmg --clobber
+        run: gh release upload "$GITHUB_REF_NAME" release/Simplicity-mac-arm64.dmg release/Simplicity-mac-arm64.zip --clobber
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.apple.outputs.signed == '1' && 'Simplicity-mac-arm64' || 'Simplicity-mac-arm64-UNSIGNED' }}
-          path: release/Simplicity-mac-arm64.dmg
+          path: |
+            release/Simplicity-mac-arm64.dmg
+            release/Simplicity-mac-arm64.zip
           if-no-files-found: error
+
+  # The signed update feed for this tag. It adds only the feed files that are
+  # missing: latest.yml as soon as the Windows installer is on the release,
+  # latest-mac.yml once the mac zip is there (if the zip is uploaded later, run
+  # "Update feed" by hand for this tag). It never replaces an installer.
+  feed:
+    name: Update feed
+    needs: [guard, windows, mac]
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/') && needs.guard.result == 'success' && needs.windows.result != 'failure' && needs.mac.result != 'failure' }}
+    uses: ./.github/workflows/update-feed.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

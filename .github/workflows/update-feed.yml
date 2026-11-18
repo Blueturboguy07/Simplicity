@@ -1,0 +1,86 @@
+# Update feed: for one GitHub release of Simplicity, makes the files the self-updater reads
+# (desktop/publik-updater.cjs, docs/updates.md):
+#   latest.yml       + latest.yml.sig       Windows: the NSIS installer on the release (Simplicity-Setup-Windows.exe)
+#   latest-mac.yml   + latest-mac.yml.sig   macOS: the zip (Squirrel.Mac installs from it) and the dmg
+# The feed files carry ABSOLUTE asset URLs (https://github.com/<repo>/releases/download/<tag>/<file>) and
+# the sha512 of each file. The .sig files are minisign signatures made with the publik update key
+# (repo secrets PUBLIK_UPDATE_KEY and PUBLIK_UPDATE_KEY_PASSWORD); each one is verified against the public
+# key in desktop/publik-update-verify.cjs before upload. publik serves these four files at
+# https://publikhq.com/api/updates/simplicity/ from the scan-approved release.
+#
+# The feed version is the version the app reports: package.json "version" of the release's commit (the
+# tag; for a draft without a tag, the release's target), NOT the tag name (tags are v0.1.x, package.json
+# is 1.12.x). The "version" input overrides it. The mac zip must hold that version (checked).
+#
+# Run it once the release (a draft is fine) holds the installer files. It adds only the feed files that
+# are missing; "force" remakes them (after a file on the release was replaced). It never touches an installer.
+name: Update feed
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, e.g. v0.2.0
+        required: true
+        type: string
+      version:
+        description: App version (empty = package.json "version" at the release's commit)
+        required: false
+        type: string
+        default: ''
+      force:
+        description: Remake feed files that already exist
+        required: false
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: false
+        type: string
+        default: ''
+      force:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-feed-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    name: Feed for ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Make, sign, verify and upload the missing feed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          VERSION_IN: ${{ inputs.version }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          version="$VERSION_IN"
+          if [ -z "$version" ]; then
+            ref="$TAG"
+            if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1; then
+              ref="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
+            fi
+            version="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$ref" \
+              | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).version)')"
+            echo "App version $version (package.json at $ref)"
+          fi
+          node scripts/publik-update-feed.cjs release --tag "$TAG" --app simplicity --version "$version" --fixed-names \
+            --repo "$GITHUB_REPOSITORY" $FORCE

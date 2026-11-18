@@ -1,0 +1,401 @@
+# Updater proof: on a real macOS runner and a real Windows runner, builds two TEST versions of Simplicity
+# (N and N+1, both with "publikUpdaterTest": true in package.json, which no release has), installs N,
+# puts N+1 and its signed feed (signed with the real publik update key) on a GitHub PRERELEASE with a
+# test tag (v0.0.0-updtest.*), and runs .github/scripts/updater-proof.cjs:
+#   - refused feeds (served from 127.0.0.1): one byte of the feed changed, signed by another key, no
+#     signature, an installer with one byte changed, and on macOS N+1 signed by another identity.
+#     For each one, N must refuse and stay N.
+#   - the good feed (the prerelease, absolute asset URLs): N must verify the signature, download N+1,
+#     check its sha512, install it, and the installed app must then report N+1.
+# The prereleases and their tags are deleted at the end of each job, pass or fail.
+#
+# The installers keep their release names (Simplicity-Setup-Windows.exe, Simplicity-mac-arm64.zip): no
+# version in the name, so the feed script runs with --fixed-names, as update-feed.yml does.
+# The test builds carry no publik app token (the update path does not use it).
+#
+# macOS: the Developer ID certificate is not in this repo's secrets (the repo has only PUBLIK_APP_TOKEN
+# and the update key; the Developer ID lives in the maintainer's keychain), so both test builds are signed
+# with a code-signing identity made on the runner, through the release's own signing config (MAC_SIGN=1:
+# hardened runtime + desktop/entitlements.mac.plist). That proves the Squirrel.Mac path (same identity
+# accepted, another refused), not Developer ID signing or notarization.
+#
+# workflow_dispatch needs this file on the default branch; until it is there, a push to feat/updater runs it.
+name: Updater proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/updater']
+
+permissions:
+  contents: write # creates, then deletes, the test prereleases
+
+concurrency:
+  group: updater-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DO_NOT_TRACK: '1'
+  PUBLIK_UPDATES: '0'
+
+jobs:
+  unit:
+    name: Unit tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: yarn }
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+      - run: yarn test
+
+      # Signatures from the reference minisign tool, in both forms the app accepts: legacy (`minisign -S -l`,
+      # Ed25519 over the file) and prehashed (`minisign -S`, Ed25519 over BLAKE2b-512). Checked here with
+      # Node's crypto, then on the macOS and Windows runners with Electron's own crypto.
+      - name: Cross-check with the reference minisign tool
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq minisign > /dev/null
+          minisign -v || true
+          d=minisign-vectors; mkdir -p $d/legacy $d/prehashed
+          minisign -G -W -p $d/minisign.pub -s "$RUNNER_TEMP/minisign.key"
+          for form in legacy prehashed; do cp test/fixtures/update-feed/latest.yml $d/$form/latest.yml; done
+          minisign -S -l -s "$RUNNER_TEMP/minisign.key" -m $d/legacy/latest.yml -x $d/legacy/latest.yml.sig
+          minisign -S -s "$RUNNER_TEMP/minisign.key" -m $d/prehashed/latest.yml -x $d/prehashed/latest.yml.sig
+          rm -f "$RUNNER_TEMP/minisign.key"
+          for form in legacy prehashed; do
+            minisign -V -p $d/minisign.pub -m $d/$form/latest.yml -x $d/$form/latest.yml.sig
+            node scripts/publik-update-feed.cjs verify $d/$form/latest.yml --public-key $d/minisign.pub
+            sed -n 2p $d/$form/latest.yml.sig | base64 -d | head -c 2; echo " <- $form signature algorithm"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minisign-vectors
+          path: minisign-vectors
+          retention-days: 7
+
+  windows:
+    name: Windows — N updates to N+1 (NSIS, unsigned)
+    needs: unit
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      V_OLD: 0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}.1
+      V_NEW: 0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}.2
+      TAG: v0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}-win
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: yarn }
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: minisign-vectors
+          path: minisign-vectors
+
+      - name: The signature check under Electron's own crypto (tauri, minisign legacy, minisign prehashed)
+        run: |
+          node -e "require('electron')" > /dev/null # the electron package downloads its binary on first use
+          ELECTRON_RUN_AS_NODE=1 "$(node -p "require('electron')")" .github/scripts/updater-electron-crypto.cjs minisign-vectors
+
+      # next/font downloads Google Fonts during the build; that sometimes fails on a runner (publik-build.yml).
+      - name: Build the app payload once (yarn build:desktop, up to 3 tries)
+        run: |
+          for try in 1 2 3; do
+            if yarn build:desktop; then exit 0; fi
+            echo "build:desktop failed (try $try of 3)"; sleep 30
+          done
+          exit 1
+
+      - name: Build N and N+1 (test builds)
+        run: |
+          set -euo pipefail
+          npm pkg set publikUpdaterTest=true --json
+          npm pkg set version="$V_OLD"
+          yarn electron-builder --win --x64 --publish never -c.directories.output=dist-old
+          npm pkg set version="$V_NEW"
+          yarn electron-builder --win --x64 --publish never -c.directories.output=dist-new
+          ls -la dist-old dist-new
+
+      - name: Check the test build carries the updater
+        run: |
+          set -euo pipefail
+          res=dist-old/win-unpacked/resources
+          node -e '
+            const asar = require("@electron/asar");
+            const files = new Set(asar.listPackage(process.argv[1]).map((f) => f.replace(/\\/g, "/")));
+            for (const f of ["/desktop/main.mjs", "/desktop/publik-updater.cjs", "/desktop/publik-update-verify.cjs", "/node_modules/electron-updater/package.json", "/node_modules/blakejs/package.json"]) {
+              if (!files.has(f)) { console.error("missing in app.asar: " + f); process.exit(1); }
+              console.log("in app.asar: " + f);
+            }
+            const p = JSON.parse(asar.extractFile(process.argv[1], "package.json"));
+            if (p.publikUpdaterTest !== true) process.exit(1);
+            console.log("package.json:", p.version, "publikUpdaterTest:", p.publikUpdaterTest);
+          ' "$res/app.asar"
+          cat "$res/app-update.yml"
+
+      - name: Install N with its own installer
+        shell: pwsh
+        run: |
+          $setup = Join-Path $PWD 'dist-old\Simplicity-Setup-Windows.exe'
+          $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited $($p.ExitCode)" }
+          Get-Process Simplicity -ErrorAction SilentlyContinue | Stop-Process -Force
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Simplicity\Simplicity.exe'
+          if (!(Test-Path $exe)) { throw "installed Simplicity.exe not found at $exe" }
+          "APP_EXE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Put N+1 on a test prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+            --title "Updater proof $TAG (test build, deleted after the run)" \
+            --notes "CI test of the self-updater (updater-proof.yml). Not a release. Deleted when the run ends." \
+            "dist-new/Simplicity-Setup-Windows.exe"
+
+      # The same command update-feed.yml runs for a real release: reads the release, writes latest.yml with
+      # absolute asset URLs, signs it with the real update key, verifies it, uploads latest.yml + .sig.
+      - name: Make the signed feed with the release script (real update key)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node scripts/publik-update-feed.cjs release --tag "$TAG" --version "$V_NEW" --app simplicity --fixed-names --repo "$GITHUB_REPOSITORY"
+          gh release download "$TAG" --pattern latest.yml --pattern latest.yml.sig --dir feed-good
+          node scripts/publik-update-feed.cjs verify feed-good/latest.yml
+          cat feed-good/latest.yml
+
+      - name: Make the refused feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/"
+          onebyte="Simplicity-Setup-Windows-onebyte.exe"
+          mkdir -p assets
+          node .github/scripts/updater-proof.cjs one-byte --src "dist-new/Simplicity-Setup-Windows.exe" --dst "assets/$onebyte"
+          gh release upload "$TAG" "assets/$onebyte"
+          node .github/scripts/updater-proof.cjs prepare --good feed-good --feed latest.yml --onebyte-url "$base$onebyte" --out cases
+
+      - name: Proof (N refuses the bad feeds, then updates to N+1)
+        timeout-minutes: 45
+        run: |
+          node .github/scripts/updater-proof.cjs run --app "$APP_EXE" --old "$V_OLD" --new "$V_NEW" \
+            --good-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/" \
+            --cases cases --out proof-logs/updater-proof-windows.json --logs proof-logs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: updater-proof-windows
+          path: |
+            proof-logs
+            feed-good/latest.yml
+            cases
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Delete the test prerelease and its tag
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1 || true
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "release $TAG still exists"; exit 1; fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1; then echo "tag $TAG still exists"; exit 1; fi
+          echo "deleted $TAG"
+
+  macos:
+    name: macOS — N updates to N+1 (Squirrel.Mac, runner-made identity)
+    needs: unit
+    runs-on: macos-15
+    timeout-minutes: 100
+    env:
+      V_OLD: 0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}.1
+      V_NEW: 0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}.2
+      TAG: v0.0.0-updtest.${{ github.run_number }}.${{ github.run_attempt }}-mac
+      SIGN_ID: Simplicity Update Test
+      OTHER_ID: Simplicity Other Identity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: yarn }
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: minisign-vectors
+          path: minisign-vectors
+
+      - name: The signature check under Electron's own crypto (tauri, minisign legacy, minisign prehashed)
+        run: |
+          node -e "require('electron')" > /dev/null # the electron package downloads its binary on first use
+          ELECTRON_RUN_AS_NODE=1 "$(node -p "require('electron')")" .github/scripts/updater-electron-crypto.cjs minisign-vectors
+
+      # Two self-signed code-signing identities in a keychain of this run, trusted for code signing on
+      # this runner only. SIGN_ID signs N and N+1; OTHER_ID re-signs a copy of N+1 for the refused case.
+      - name: Make two code-signing identities (this runner only)
+        run: |
+          set -euo pipefail
+          KC="$RUNNER_TEMP/updtest.keychain-db"
+          KCPASS="$(/usr/bin/openssl rand -hex 16)"
+          P12PASS="$(/usr/bin/openssl rand -hex 16)"
+          security create-keychain -p "$KCPASS" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPASS" "$KC"
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          for name in "$SIGN_ID" "$OTHER_ID"; do
+            d="$RUNNER_TEMP/id-$(echo "$name" | tr ' ' '-')"; mkdir -p "$d"
+            printf '[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=%s\n[ext]\nbasicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=critical,codeSigning\n' "$name" > "$d/req.cnf"
+            /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 2 -config "$d/req.cnf" -keyout "$d/key.pem" -out "$d/cert.pem" 2>/dev/null
+            /usr/bin/openssl pkcs12 -export -inkey "$d/key.pem" -in "$d/cert.pem" -name "$name" -out "$d/id.p12" -passout "pass:$P12PASS"
+            security import "$d/id.p12" -k "$KC" -P "$P12PASS" -T /usr/bin/codesign >/dev/null
+            sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$d/cert.pem"
+            rm -f "$d/key.pem" "$d/id.p12"
+          done
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPASS" "$KC" >/dev/null
+          security find-identity -v -p codesigning "$KC"
+          echo "KC=$KC" >> "$GITHUB_ENV"
+
+      # next/font downloads Google Fonts during the build; that sometimes fails on a runner (publik-build.yml).
+      - name: Build the app payload once (yarn build:desktop, up to 3 tries)
+        run: |
+          for try in 1 2 3; do
+            if yarn build:desktop; then exit 0; fi
+            echo "build:desktop failed (try $try of 3)"; sleep 30
+          done
+          exit 1
+
+      # MAC_SIGN=1 is the release's signing branch of electron-builder.cjs (hardened runtime, entitlements);
+      # only the identity differs: SIGN_ID instead of the Developer ID. No Apple secrets: no notarization.
+      - name: Build N and N+1 (test builds, arm64 zip, signed with SIGN_ID)
+        env:
+          MAC_SIGN: '1'
+          CSC_IDENTITY_AUTO_DISCOVERY: 'true'
+        run: |
+          set -euo pipefail
+          npm pkg set publikUpdaterTest=true --json
+          npm pkg set version="$V_OLD"
+          yarn electron-builder --mac zip --arm64 --publish never -c.directories.output=dist-old -c.mac.identity="$SIGN_ID"
+          npm pkg set version="$V_NEW"
+          yarn electron-builder --mac zip --arm64 --publish never -c.directories.output=dist-new -c.mac.identity="$SIGN_ID"
+          ls -la dist-old dist-new
+
+      - name: Check the test build carries the updater and the signature
+        run: |
+          set -euo pipefail
+          app=dist-old/mac-arm64/Simplicity.app
+          node -e '
+            const asar = require("@electron/asar");
+            const files = new Set(asar.listPackage(process.argv[1]));
+            for (const f of ["/desktop/main.mjs", "/desktop/publik-updater.cjs", "/desktop/publik-update-verify.cjs", "/node_modules/electron-updater/package.json", "/node_modules/blakejs/package.json"]) {
+              if (!files.has(f)) { console.error("missing in app.asar: " + f); process.exit(1); }
+              console.log("in app.asar: " + f);
+            }
+            const p = JSON.parse(asar.extractFile(process.argv[1], "package.json"));
+            if (p.publikUpdaterTest !== true) process.exit(1);
+            console.log("package.json:", p.version, "publikUpdaterTest:", p.publikUpdaterTest);
+          ' "$app/Contents/Resources/app.asar"
+          cat "$app/Contents/Resources/app-update.yml"
+          codesign -dvv "$app" 2>&1 | grep -E '^(Identifier|Authority|TeamIdentifier|Runtime)'
+          codesign -d -r- "$app" 2>&1 | grep designated
+          codesign --verify --deep --strict "$app" && echo "codesign: valid"
+          du -sh "$app" dist-old/*.zip
+
+      - name: Install N (unzip into ~/Applications, as a user would)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/Applications"
+          rm -rf "$HOME/Applications/Simplicity.app"
+          ditto -x -k "dist-old/Simplicity-mac-arm64.zip" "$HOME/Applications/"
+          echo "APP_BUNDLE=$HOME/Applications/Simplicity.app" >> "$GITHUB_ENV"
+
+      - name: Put N+1 on a test prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+            --title "Updater proof $TAG (test build, deleted after the run)" \
+            --notes "CI test of the self-updater (updater-proof.yml). Not a release. Deleted when the run ends." \
+            "dist-new/Simplicity-mac-arm64.zip"
+
+      # The same command update-feed.yml runs for a real release (see the Windows job). It also opens the
+      # zip and checks that the app in it is version V_NEW.
+      - name: Make the signed feed with the release script (real update key)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          node scripts/publik-update-feed.cjs release --tag "$TAG" --version "$V_NEW" --app simplicity --fixed-names --repo "$GITHUB_REPOSITORY"
+          gh release download "$TAG" --pattern latest-mac.yml --pattern latest-mac.yml.sig --dir feed-good
+          node scripts/publik-update-feed.cjs verify feed-good/latest-mac.yml
+          cat feed-good/latest-mac.yml
+
+      - name: Make the refused feeds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIK_UPDATE_KEY: ${{ secrets.PUBLIK_UPDATE_KEY }}
+          PUBLIK_UPDATE_KEY_PASSWORD: ${{ secrets.PUBLIK_UPDATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/"
+          zip="dist-new/Simplicity-mac-arm64.zip"
+          mkdir -p assets other
+          onebyte="Simplicity-mac-arm64-onebyte.zip"
+          node .github/scripts/updater-proof.cjs one-byte --src "$zip" --dst "assets/$onebyte"
+          # N+1 re-signed with OTHER_ID: same bundle, same version, another code-signing identity
+          ditto -x -k "$zip" other/
+          codesign --force --deep --options runtime --timestamp=none --entitlements desktop/entitlements.mac.plist --keychain "$KC" --sign "$OTHER_ID" other/Simplicity.app
+          codesign --verify --deep --strict other/Simplicity.app && codesign -dvv other/Simplicity.app 2>&1 | grep -E '^Authority'
+          otherzip="assets/Simplicity-mac-arm64-otheridentity.zip"
+          ditto -c -k --sequesterRsrc --keepParent other/Simplicity.app "$otherzip"
+          rm -rf other
+          gh release upload "$TAG" "assets/$onebyte" "$otherzip"
+          node scripts/publik-update-feed.cjs write --app simplicity --version "$V_NEW" --fixed-names --download-base "$base" --mac-zip "$otherzip" --out feed-otherid
+          node .github/scripts/updater-proof.cjs prepare --good feed-good --feed latest-mac.yml --onebyte-url "$base$onebyte" --other-identity feed-otherid --out cases
+
+      - name: Proof (N refuses the bad feeds, then updates to N+1)
+        timeout-minutes: 50
+        run: |
+          node .github/scripts/updater-proof.cjs run --app "$APP_BUNDLE/Contents/MacOS/Simplicity" --bundle "$APP_BUNDLE" \
+            --old "$V_OLD" --new "$V_NEW" --good-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/" \
+            --cases cases --out proof-logs/updater-proof-macos.json --logs proof-logs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: updater-proof-macos
+          path: |
+            proof-logs
+            feed-good/latest-mac.yml
+            cases
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Delete the test prerelease and its tag
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1 || true
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "release $TAG still exists"; exit 1; fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" >/dev/null 2>&1; then echo "tag $TAG still exists"; exit 1; fi
+          echo "deleted $TAG"
+
+      - name: Remove the keychain of this run
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/updtest.keychain-db" || true

@@ -4,7 +4,9 @@ name: publik build
 # release.yml and uploads them as workflow ARTIFACTS:
 #   - macOS arm64: Simplicity.app, NOT signed here (this repo holds no Apple
 #     secrets), packed with ditto. A Mac that holds the Developer ID signs it,
-#     notarizes it and packs it into Simplicity-mac-arm64.dmg.
+#     notarizes it and packs it into Simplicity-mac-arm64.dmg, and packs the
+#     stapled app into Simplicity-mac-arm64.zip (what a macOS update installs;
+#     docs/updates.md › Cut a release).
 #   - Windows x64: Simplicity-Setup-Windows.exe (unsigned, as every release
 #     so far).
 #
@@ -23,6 +25,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  PUBLIK_UPDATES: '0' # the self-tests do not check for updates (desktop/publik-updater.cjs)
 
 concurrency:
   group: publik-build-${{ github.ref }}

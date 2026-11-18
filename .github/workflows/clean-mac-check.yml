@@ -36,6 +36,10 @@ permissions:
 
 # No DO_NOT_TRACK here: the check waits for the first usage event at a local
 # listener. publikhq.com is blocked in /etc/hosts instead.
+# PUBLIK_UPDATES=0: the checked app does not check for updates
+# (desktop/publik-updater.cjs).
+env:
+  PUBLIK_UPDATES: '0'
 
 jobs:
   check:

@@ -28,6 +28,9 @@ import { pickServerPort } from './serverPort.mjs';
    app token. */
 import { credentialPath, ensureSignedIn, resolveProvider } from './publik.mjs';
 import { electronGateUI } from './publik-gate.mjs';
+/* Signed self-updates (publik-updater.cjs, see docs/updates.md). A CommonJS
+   file: its module.exports is the default import. */
+import publikUpdater from './publik-updater.cjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -331,7 +334,20 @@ async function createWindow() {
   }
 }
 
+/* True only in a test build started with PUBLIK_UPDATER_TEST (the CI update
+   proof): the app then starts no window and no server. */
+let updaterTestHook = false;
+
 app.whenReady().then(async () => {
+  /* Updates: checks publik's signed update feed at launch and every 24 h, and
+     adds "Check for Updates…" to the menu (macOS: the Simplicity menu;
+     Windows: Help). A test build started with PUBLIK_UPDATER_TEST runs the CI
+     update proof and exits instead: nothing below starts. */
+  if (publikUpdater.startUpdates({ slug: 'simplicity', appName: 'Simplicity' }).testHook) {
+    updaterTestHook = true;
+    return;
+  }
+
   /* Every publik app opens with Sign in with publik. The gate shows its
      screens in a small window before the app's own window; it resolves once
      the person is signed in (and, the first time, chose how to pay for AI),
@@ -344,6 +360,7 @@ app.whenReady().then(async () => {
 });
 
 app.on('activate', () => {
+  if (updaterTestHook) return;
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 

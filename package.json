@@ -15,8 +15,8 @@
     "format:write": "prettier . --write",
     "build:desktop": "next build --webpack && node desktop/prepare.mjs",
     "app": "yarn build:desktop && electron .",
-    "dist:mac": "yarn build:desktop && electron-builder --mac",
-    "dist:win": "yarn build:desktop && electron-builder --win"
+    "dist:mac": "yarn build:desktop && electron-builder --mac --publish never",
+    "dist:win": "yarn build:desktop && electron-builder --win --publish never"
   },
   "dependencies": {
     "@google/genai": "^1.34.0",
@@ -32,8 +32,10 @@
     "async-mutex": "^0.5.0",
     "axios": "^1.8.3",
     "better-sqlite3": "^13.0.1",
+    "blakejs": "^1.2.1",
     "clsx": "^2.1.0",
     "drizzle-orm": "^0.45.2",
+    "electron-updater": "^6.8.11",
     "js-tiktoken": "^1.0.21",
     "jsdom": "^29.0.1",
     "jspdf": "^4.2.1",
