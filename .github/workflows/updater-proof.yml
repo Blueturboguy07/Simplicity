@@ -47,7 +47,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 24, cache: yarn }
+      # On Linux, onnxruntime-node's install script downloads a CUDA build that GitHub answers with 404.
+      # The tests do not use CUDA. (The repo's other workflows run on macOS and Windows only.)
       - run: yarn install --frozen-lockfile --network-timeout 600000
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
       - run: yarn test
 
       # Signatures from the reference minisign tool, in both forms the app accepts: legacy (`minisign -S -l`,
