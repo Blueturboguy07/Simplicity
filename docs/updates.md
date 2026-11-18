@@ -92,7 +92,7 @@ therefore work in the app; `-l` is not needed. The trusted comment must name the
 
 ## Cut a release
 
-1. Raise `package.json` "version" (above the last release; 1.12.8 is v0.1.9). Commit.
+1. Raise `package.json` "version" (above the last release; 1.12.9 is v0.1.10). Commit.
 2. Build the installers as before:
    - `release.yml` (a tag push) builds the Windows installer and, when the Apple secrets exist, the signed
      and notarized dmg AND zip (`yarn dist:mac` now makes both). Today the repo has no Apple secrets.
