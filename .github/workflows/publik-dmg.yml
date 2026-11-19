@@ -1,0 +1,82 @@
+# publik dmg: packs the macOS dmg of a Simplicity release from the update zip on its DRAFT release.
+# scripts/publik-release.sh starts it after it uploaded Simplicity-mac-arm64.zip: the app that the
+# maintainer's Mac signed with the Developer ID, notarized and stapled. electron-builder's dmg target (the
+# dmg settings of electron-builder.cjs, as `yarn dist:mac` uses them) packs that app as it is
+# (--prepackaged: no rebuild, no signing, no change to the app). The dmg leaves as a workflow artifact; the
+# maintainer's Mac signs, notarizes and staples it, then uploads it to the draft. (SurfCam's publik-dmg.yml.)
+name: publik dmg
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The draft release that holds the update zip, e.g. v0.1.11
+        required: true
+        type: string
+
+permissions:
+  contents: write # GitHub shows a draft release only to a token that can write; this job writes nothing
+
+concurrency:
+  group: publik-dmg-${{ inputs.tag }}
+  cancel-in-progress: true
+
+env:
+  DO_NOT_TRACK: '1'
+
+jobs:
+  dmg:
+    name: macOS dmg (from the stapled app)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+
+      - name: The stapled app from the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          want="$(node -p "require('./package.json').version")"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --pattern Simplicity-mac-arm64.zip --dir in
+          mkdir app
+          ditto -x -k in/Simplicity-mac-arm64.zip app
+          rm -r in
+          v="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' app/Simplicity.app/Contents/Info.plist)"
+          echo "release $TAG: the app is $v, package.json is $want"
+          test "$v" = "$want"
+          codesign --verify --deep --strict app/Simplicity.app
+          codesign -dvv app/Simplicity.app 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp|Identifier)='
+          xcrun stapler validate app/Simplicity.app
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Pack the dmg (electron-builder, the app as it is)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: yarn electron-builder --mac dmg --arm64 --prepackaged app/Simplicity.app --publish never -c.mac.identity=null -c.mac.notarize=false -c.dmg.sign=false
+
+      - name: Check the dmg
+        run: |
+          set -euo pipefail
+          dmg=release/Simplicity-mac-arm64.dmg
+          ls -l release
+          hdiutil attach "$dmg" -nobrowse -noautoopen -readonly -mountpoint mnt
+          test -L mnt/Applications
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' mnt/Simplicity.app/Contents/Info.plist)" = "$VERSION"
+          codesign --verify --deep --strict mnt/Simplicity.app
+          xcrun stapler validate mnt/Simplicity.app
+          diff <(codesign -d -r- app/Simplicity.app 2>&1 | grep designated) <(codesign -d -r- mnt/Simplicity.app 2>&1 | grep designated)
+          diff <(codesign -dvvv app/Simplicity.app 2>&1 | grep -E '^CDHash=') <(codesign -dvvv mnt/Simplicity.app 2>&1 | grep -E '^CDHash=')
+          hdiutil detach mnt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: simplicity-dmg
+          path: release/Simplicity-mac-arm64.dmg
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 3

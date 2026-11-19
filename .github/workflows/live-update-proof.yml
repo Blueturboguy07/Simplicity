@@ -1,0 +1,123 @@
+# Live update proof: a user's Simplicity updating itself from the LIVE publik feed, on real runners.
+# For each OS Simplicity ships (macOS Apple silicon; Windows x64), the job downloads the published release
+# `from_tag` from GitHub, installs it as a user does, starts it the normal way (release build: no test hook,
+# no feed override, nobody signs in, so no server, no local search, no microphone, camera or screen capture)
+# and lets it ask https://publikhq.com/api/updates/simplicity/. Then (.github/scripts/live-update-proof.cjs):
+#   expect_version = the app version of from_tag: the app must find no update and stay as it is.
+#   expect_version = a newer app version: the app must download it, ask "Restart now?", and after the
+#     answer ("restart": Restart Now; "later": Later, then the user quits and opens the app) run it.
+# The tags (v0.1.x) and the app version (package.json, 1.12.x) differ: from_tag is a TAG, expect_version
+# is an APP VERSION. The proof reads the app version of from_tag from that release's signed feed.
+# macOS also gets REAL TCC grants (camera, microphone, screen capture, accessibility) bound to the app's
+# designated requirement before the update, and checks after it that each stored requirement is still
+# satisfied (the check tccd makes; a runner cannot show a consent prompt). The macOS jobs click
+# "Check for Updates…" in the Simplicity menu and read the answer. Job `unit` runs the unit tests, among
+# them desktop/publik-updater-ui.test.mjs: the 24-hour check (fake timers), the menu item on macOS and
+# Windows (Help menu) and the restart question. Logs, UI dumps and screenshots: the artifacts.
+# A failed check fails the job. Run it by hand: Actions › Live update proof, or
+#   gh workflow run live-update-proof.yml -f from_tag=v0.1.10 -f expect_version=1.12.10
+name: Live update proof
+
+on:
+  push:
+    branches: [live-proof] # TEMPORARY, removed before the merge
+  workflow_dispatch:
+    inputs:
+      from_tag:
+        description: The published release to install first (N, a tag), e.g. v0.1.10
+        required: true
+        type: string
+      expect_version:
+        description: The app version the app must run at the end (N+1 for an update, the version of N for "no update"), e.g. 1.12.10
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-update-proof-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: macOS arm64 (${{ matrix.answer }})
+    strategy:
+      fail-fast: false
+      matrix:
+        answer: [restart, later]
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Runner
+        run: sw_vers; uname -m; spctl --status || true; csrutil status || true
+      - name: Live update proof
+        env:
+          FROM_TAG: ${{ inputs.from_tag || 'v0.1.10' }}
+          EXPECT: ${{ inputs.expect_version || '1.12.9' }}
+          ANSWER: ${{ matrix.answer }}
+        run: node .github/scripts/live-update-proof.cjs --from-tag "$FROM_TAG" --expect "$EXPECT" --answer "$ANSWER" --repo "$GITHUB_REPOSITORY" --out live-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-update-proof-macos-arm64-${{ matrix.answer }}
+          path: live-proof
+          if-no-files-found: warn
+          retention-days: 30
+
+  windows:
+    name: Windows x64 (${{ matrix.answer }})
+    strategy:
+      fail-fast: false
+      matrix:
+        answer: [restart, later]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Live update proof
+        env:
+          FROM_TAG: ${{ inputs.from_tag || 'v0.1.10' }}
+          EXPECT: ${{ inputs.expect_version || '1.12.9' }}
+          ANSWER: ${{ matrix.answer }}
+        run: node .github/scripts/live-update-proof.cjs --from-tag "$FROM_TAG" --expect "$EXPECT" --answer "$ANSWER" --repo "$GITHUB_REPOSITORY" --out live-proof
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-update-proof-windows-${{ matrix.answer }}
+          path: live-proof
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The unit tests of the repo (yarn test), on the two OSes the release build runs them on. Among them
+  # desktop/publik-updater-ui.test.mjs: the 24-hour check (fake timers), "Check for Updates…" on macOS and
+  # in the Windows Help menu, and the restart question.
+  unit:
+    name: Unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      DO_NOT_TRACK: '1'
+      PUBLIK_UPDATES: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: yarn }
+      # On Linux, onnxruntime-node's install script downloads a CUDA build that GitHub answers with 404.
+      # The tests do not use CUDA.
+      - run: yarn install --frozen-lockfile --network-timeout 600000
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+      - run: yarn test
