@@ -1,7 +1,7 @@
 {
   "name": "vane",
   "productName": "Simplicity",
-  "version": "1.12.9",
+  "version": "1.12.10",
   "license": "MIT",
   "author": "ItzCrazyKns",
   "main": "desktop/main.mjs",
