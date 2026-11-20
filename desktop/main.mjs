@@ -104,11 +104,11 @@ function prepareDataDir(searxngURL) {
 /* What the Next server gets about publik. The publik module in this process
    owns the install key (POST /installs at the gate); the server never mints.
    It reads the module's credential file (src/lib/publik/provision.ts) for
-   the state and the choice, and, when the person connected their plan at the
-   gate, it gets the key as PUBLIK_API_KEY so its config manager creates the
-   publik provider from the environment. The app token never reaches the
-   server; the renderer (contextIsolation, no nodeIntegration) talks to the
-   server over HTTP and /api/publik never returns the key. */
+   the state and the choice, and, when the choice is "publik" (the gate stores
+   it at sign-in), it gets the key as PUBLIK_API_KEY so its config manager
+   creates the publik provider from the environment. The app token never
+   reaches the server; the renderer (contextIsolation, no nodeIntegration)
+   talks to the server over HTTP and /api/publik never returns the key. */
 function publikEnv() {
   const env = {
     PUBLIK_APP_VERSION: app.getVersion(),
@@ -350,9 +350,10 @@ app.whenReady().then(async () => {
 
   /* Every publik app opens with Sign in with publik. The gate shows its
      screens in a small window before the app's own window; it resolves once
-     the person is signed in (and, the first time, chose how to pay for AI),
-     then usage counting runs in the background. PUBLIK_SELF_TEST=1 prints
-     the module's self-test line and exits instead. */
+     the person is signed in (no pay screen: with no stored choice it stores
+     "publik"; a 402 later offers a plan), then usage counting runs in the
+     background. PUBLIK_SELF_TEST=1 prints the module's self-test line and
+     exits instead. */
   const ui = electronGateUI({ appName: 'Simplicity' });
   await ensureSignedIn(ui);
   ui.close();
