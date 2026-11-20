@@ -831,10 +831,16 @@ async function windows() {
     check(`the app found ${EXPECT} in the live feed and downloaded the installer from GitHub (its log: the URL of the live feed, a newer release than ${FROM_TAG})`,
       want && s1 && s1.found && s1.found.version === EXPECT && s1.found.urls[0] === want && s1.downloaded && s1.downloaded.version === EXPECT && pendingRe().test(s1.downloaded.file),
       s1 && { want, found: s1.found, downloading: s1.downloading, downloaded: s1.downloaded, error: s1.error });
-    const question = await waitFor('the question "Restart now?"', () => {
+    let question = await waitFor('the question "Restart now?"', () => {
       const d = winDump();
       return d.includes(`TEXT\t${APP} ${EXPECT} is ready to install.`) ? d : null;
     }, 3 * 60_000, 2000);
+    // The dialog's text shows before its two command links are in the accessibility tree: look again for 20 s.
+    for (let i = 0; question && i < 10 && !(/BUTTON\tRestart Now/.test(question) && /BUTTON\tLater/.test(question)); i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const d = winDump();
+      if (d.includes(`TEXT\t${APP} ${EXPECT} is ready to install.`)) question = d;
+    }
     save('restart-question.txt', question || winDump());
     shot('restart-question');
     check(`the app asks "${APP} ${EXPECT} is ready to install." with Restart Now and Later`,

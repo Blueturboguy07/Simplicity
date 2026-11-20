@@ -31,7 +31,9 @@ function Items($w) {
   $items = @()
   foreach ($e in $w.FindAll($Scope::Descendants, $All)) {
     $t = $e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
-    if ($e.Current.Name -and @('Pane', 'Group', 'Image', 'TitleBar', 'Document', 'Custom') -notcontains $t) { $items += [pscustomobject]@{ type = $t; name = $e.Current.Name } }
+    # A task dialog's command links ("Restart Now", "Later") are not always of type Button: list them by name.
+    if ($e.Current.Name -match '^(Restart Now|Later)(\r|\n|$)') { $items += [pscustomobject]@{ type = 'Button'; name = (($e.Current.Name -split "[\r\n]")[0]); rawType = $t } }
+    elseif ($e.Current.Name -and @('Pane', 'Group', 'Image', 'TitleBar', 'Document', 'Custom') -notcontains $t) { $items += [pscustomobject]@{ type = $t; name = $e.Current.Name } }
   }
   , $items
 }
