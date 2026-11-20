@@ -14,6 +14,9 @@ env:
 
 jobs:
   build-amd64:
+    # Upstream's server images for DockerHub. This fork ships the desktop app only and has no
+    # DockerHub login, so the job would fail at "Log in to DockerHub" on every release.
+    if: github.repository == 'ItzCrazyKns/Vane'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -82,6 +85,9 @@ jobs:
             --push .
 
   build-arm64:
+    # Upstream's server images for DockerHub. This fork ships the desktop app only and has no
+    # DockerHub login, so the job would fail at "Log in to DockerHub" on every release.
+    if: github.repository == 'ItzCrazyKns/Vane'
     runs-on: ubuntu-24.04-arm
     strategy:
       matrix:
